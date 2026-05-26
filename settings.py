@@ -15,12 +15,7 @@ class WebSettings(BaseSettings):
 
 @dataclass
 class ExchangeSettings(BaseSettings):
-    MASTER_APP_KEY: str | None = None
-    MASTER_SECRET_KEY : str | None = None
-    SLAVE1_APP_KEY : str | None = None
-    SLAVE1_SECRET_KEY : str | None = None
-    SLAVE2_APP_KEY : str | None = None
-    SLAVE2_SECRET_KEY : str | None = None
+    COPYBOT_CONFIG_PATH: str | None = None
 
 @dataclass
 class TotalSettings(ExchangeSettings, DiscordSettings, WebSettings):

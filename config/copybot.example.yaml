@@ -1,0 +1,57 @@
+# 카피봇 설정 참고
+#
+# YAML 주석은 "#"으로 작성합니다.
+#
+# 최상위 항목:
+#   accounts: 복사 그룹에서 사용할 계좌 목록
+#   copy_groups: 마스터 계좌와 슬레이브 계좌를 연결하는 복사 그룹 목록
+#
+# 선택 가능한 값:
+#   broker: [db, kiwoom, miraeasset, fake]
+#   market_scope: [domestic, global]
+#   mode: [dry_run, live]
+#   enabled: [true, false]
+#
+# 계좌 항목:
+#   account_id: 설정 파일 안에서 사용할 고유 계좌 이름
+#   broker: 사용할 증권사 또는 브로커
+#   market_scope: 국내/글로벌 시장 구분
+#   credentials_ref: 인증 정보를 읽을 환경변수 접두사
+#   mode: 주문 실행 모드
+#
+# 복사 그룹 항목:
+#   group_id: 고유 복사 그룹 이름
+#   master_account_id: 기준이 되는 마스터 account_id
+#   slave_account_ids: 마스터를 따라갈 슬레이브 account_id 목록
+#   enabled: 그룹 활성화 여부
+#   mode: 주문 실행 모드
+#   poll_interval_seconds: 동기화 확인 주기, 초 단위
+#   min_trade_value: 이 금액보다 작은 주문 계획은 건너뜀
+#
+# mode 설명:
+#   dry_run: 주문 계획만 계산하고 실제 주문은 넣지 않음
+#   live: 브로커가 실주문을 지원하면 실제 주문을 넣음
+#
+accounts:
+  - account_id: domestic-master
+    broker: fake
+    market_scope: domestic
+    credentials_ref: DOMESTIC_MASTER
+    mode: dry_run
+
+  - account_id: domestic-slave
+    broker: fake
+    market_scope: domestic
+    credentials_ref: DOMESTIC_SLAVE
+    mode: dry_run
+
+copy_groups:
+  - group_id: domestic-copy
+    master_account_id: domestic-master
+    slave_account_ids:
+      - domestic-slave
+    enabled: true
+    mode: dry_run
+    poll_interval_seconds: 60
+    min_trade_value: 10000
+    cash_safety_buffer: 0.02

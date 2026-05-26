@@ -4,10 +4,10 @@ python-dotenv~=1.0.1
 dhooks~=1.1.4
 loguru~=0.7.2
 fastapi~=0.99.0
-orjson~=3.10.12
+orjson~=3.11.9
 aiohttp~=3.10.11
 httpx~=0.23.3
 pandas~=2.2.3
-ebest
+PyYAML~=6.0.2
 prettytable
 ipython
