@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .types import AccountMode, BrokerName, MarketScope, OrderSide, SyncRunMode
+from .types import AccountMode, BrokerName, MarketScope, OrderSide, OrderType, SyncRunMode
 
 
 def utc_now_iso() -> str:
@@ -59,6 +59,24 @@ class PortfolioSnapshot:
 
 
 @dataclass
+class Quote:
+    symbol: str
+    exchange: str = ""
+    last_price: float = 0.0
+    ask_price_1: float = 0.0
+    bid_price_1: float = 0.0
+    currency: str = "KRW"
+    captured_at: str = field(default_factory=utc_now_iso)
+
+    @property
+    def key(self) -> str:
+        return f"{self.exchange}:{self.symbol}" if self.exchange else self.symbol
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class TargetOrder:
     group_id: str
     account_id: str
@@ -70,7 +88,9 @@ class TargetOrder:
     estimated_price: float
     estimated_value: float
     mode: SyncRunMode
+    order_type: OrderType
     exchange: str = ""
+    limit_price: float | None = None
     reason: str = "rebalance"
     created_at: str = field(default_factory=utc_now_iso)
 
@@ -84,6 +104,7 @@ class TargetOrder:
         payload["market_scope"] = self.market_scope.value
         payload["side"] = self.side.value
         payload["mode"] = self.mode.value
+        payload["order_type"] = self.order_type.value
         payload["instrument_key"] = self.instrument_key
         return payload
 
@@ -140,6 +161,7 @@ class CopyGroupConfig:
     enabled: bool = True
     poll_interval_seconds: int = 60
     min_trade_value: float = 0.0
+    cash_safety_buffer: float = 0.02
     mode: AccountMode = AccountMode.DRY_RUN
 
     @classmethod
@@ -151,6 +173,7 @@ class CopyGroupConfig:
             enabled=bool(values.get("enabled", True)),
             poll_interval_seconds=int(values.get("poll_interval_seconds", 60)),
             min_trade_value=float(values.get("min_trade_value", 0.0)),
+            cash_safety_buffer=float(values.get("cash_safety_buffer", 0.02)),
             mode=AccountMode(values.get("mode", AccountMode.DRY_RUN.value)),
         )
 

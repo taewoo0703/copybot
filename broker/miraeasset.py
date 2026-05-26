@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.schemas import PortfolioSnapshot, TargetOrder
+from core.schemas import PortfolioSnapshot, Quote, TargetOrder
 
 from .base import BrokerCapabilities, BrokerClient, BrokerCredentials, BrokerFeatureUnavailable
 
@@ -21,10 +21,10 @@ class MiraeAssetBrokerClient(BrokerClient):
     async def get_portfolio_snapshot(self) -> PortfolioSnapshot:
         raise BrokerFeatureUnavailable(self.last_message)
 
-    async def get_quote(self, symbol: str, exchange: str = "") -> float:
+    async def get_quote(self, symbol: str, exchange: str = "") -> Quote:
         raise BrokerFeatureUnavailable(self.last_message)
 
-    async def place_market_order(self, order: TargetOrder):
+    async def place_order(self, order: TargetOrder):
         raise BrokerFeatureUnavailable(self.last_message)
 
     def get_capabilities(self) -> BrokerCapabilities:

@@ -21,6 +21,7 @@ class BrokerImplementationTests(unittest.TestCase):
         self.assertTrue(capabilities.supports_domestic_stock)
         self.assertTrue(capabilities.supports_global_stock)
         self.assertTrue(capabilities.supports_market_order)
+        self.assertTrue(capabilities.supports_limit_order)
 
     def test_kiwoom_capabilities_are_domestic_only(self):
         client = KiwoomBrokerClient(
@@ -32,6 +33,7 @@ class BrokerImplementationTests(unittest.TestCase):
 
         self.assertTrue(capabilities.supports_domestic_stock)
         self.assertFalse(capabilities.supports_global_stock)
+        self.assertTrue(capabilities.supports_limit_order)
 
     def test_token_payloads_match_broker_oauth_shapes(self):
         db = DBBrokerClient(

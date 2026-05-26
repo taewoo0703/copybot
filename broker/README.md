@@ -25,5 +25,6 @@ REST endpoint paths can be provided per credential ref:
 - `DOMESTIC_MASTER_QUOTE_TR_ID`
 
 DB and Kiwoom adapters share the common REST/OAuth base and expose broker-specific
-OAuth request payloads. Mirae Asset is intentionally a non-live shell until a
-supported official trading API is available.
+OAuth request payloads. Sell orders are sent as market orders; buy orders are
+sent as limit orders at `Quote.ask_price_1`. Mirae Asset is intentionally a
+non-live shell until a supported official trading API is available.

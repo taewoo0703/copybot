@@ -20,6 +20,7 @@ class KiwoomBrokerClient(OAuthRestBrokerClient):
             supports_domestic_stock=True,
             supports_global_stock=False,
             supports_market_order=True,
+            supports_limit_order=True,
             supports_live_trading=True,
             supports_fractional_quantity=False,
             notes="Kiwoom REST API public guide exposes domestic stock categories; global scope is disabled.",
@@ -37,9 +38,10 @@ class KiwoomBrokerClient(OAuthRestBrokerClient):
         body.update(
             {
                 "broker": "kiwoom",
-                "ord_dvsn": "03",
+                "ord_dvsn": "00" if order.limit_price else "03",
                 "trde_tp": "BUY" if order.side == OrderSide.BUY else "SELL",
                 "mrkt_tp": "KRX" if order.market_scope == MarketScope.DOMESTIC else order.exchange,
+                "ord_prc": order.limit_price or 0,
             }
         )
         return body

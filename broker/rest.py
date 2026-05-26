@@ -5,7 +5,7 @@ try:
 except ImportError:
     httpx = None
 
-from core.schemas import Holding, PortfolioSnapshot, TargetOrder
+from core.schemas import Holding, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import MarketScope, OrderSide
 
 from .base import BrokerClient, BrokerCredentials, BrokerError, BrokerFeatureUnavailable
@@ -108,7 +108,7 @@ class OAuthRestBrokerClient(BrokerClient):
         payload = await self._post_json(path, self._balance_request_body(), self.credentials.extra.get("BALANCE_TR_ID"))
         return self._parse_snapshot(payload)
 
-    async def get_quote(self, symbol: str, exchange: str = "") -> float:
+    async def get_quote(self, symbol: str, exchange: str = "") -> Quote:
         path = self._configured_path(self._quote_path_key())
         if not path:
             raise BrokerFeatureUnavailable(
@@ -119,9 +119,9 @@ class OAuthRestBrokerClient(BrokerClient):
             {"symbol": symbol, "exchange": exchange, "market_scope": self.account.market_scope.value},
             self.credentials.extra.get("QUOTE_TR_ID"),
         )
-        return float(payload.get("price") or payload.get("current_price") or payload.get("stck_prpr") or 0.0)
+        return self._parse_quote(symbol, exchange, payload)
 
-    async def place_market_order(self, order: TargetOrder):
+    async def place_order(self, order: TargetOrder) -> OrderResult:
         path = self._configured_path(self._order_path_key())
         if not path:
             raise BrokerFeatureUnavailable(
@@ -129,8 +129,6 @@ class OAuthRestBrokerClient(BrokerClient):
             )
         payload = await self._post_json(path, self._order_request_body(order), self.credentials.extra.get("ORDER_TR_ID"))
         order_id = str(payload.get("order_id") or payload.get("ord_no") or payload.get("OrdNo") or "")
-        from core.schemas import OrderResult
-
         return OrderResult(order=order, accepted=True, order_id=order_id or None, message=str(payload))
 
     def _balance_path_key(self) -> str:
@@ -154,11 +152,42 @@ class OAuthRestBrokerClient(BrokerClient):
             "symbol": order.symbol,
             "exchange": order.exchange,
             "side": order.side.value,
-            "order_type": "market",
+            "order_type": order.order_type.value,
             "quantity": order.quantity,
             "estimated_price": order.estimated_price,
+            "limit_price": order.limit_price,
             "market_scope": order.market_scope.value,
         }
+
+    def _parse_quote(self, symbol: str, exchange: str, payload: dict) -> Quote:
+        return Quote(
+            symbol=str(payload.get("symbol") or payload.get("code") or payload.get("pdno") or symbol),
+            exchange=str(payload.get("exchange") or exchange),
+            last_price=float(
+                payload.get("last_price")
+                or payload.get("price")
+                or payload.get("current_price")
+                or payload.get("stck_prpr")
+                or 0.0
+            ),
+            ask_price_1=float(
+                payload.get("ask_price_1")
+                or payload.get("ask_price")
+                or payload.get("ask1")
+                or payload.get("askp1")
+                or payload.get("sel_fprc")
+                or 0.0
+            ),
+            bid_price_1=float(
+                payload.get("bid_price_1")
+                or payload.get("bid_price")
+                or payload.get("bid1")
+                or payload.get("bidp1")
+                or payload.get("buy_fprc")
+                or 0.0
+            ),
+            currency=str(payload.get("currency") or ("KRW" if self.account.market_scope == MarketScope.DOMESTIC else "USD")),
+        )
 
     def _parse_snapshot(self, payload: dict) -> PortfolioSnapshot:
         raw_holdings = payload.get("holdings") or payload.get("positions") or payload.get("items") or []

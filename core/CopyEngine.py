@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from math import floor
 import time
 import traceback
 from typing import Any
@@ -10,8 +12,8 @@ from .AccountRegistry import AccountRegistry
 from .LogManager import logManager
 from .PortfolioRebalancer import PortfolioRebalancer
 from .config_loader import load_copybot_config
-from .schemas import CopyBotConfig, CopyGroupConfig, OrderResult, PortfolioSnapshot, TargetOrder
-from .types import SyncRunMode
+from .schemas import CopyBotConfig, CopyGroupConfig, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from .types import OrderSide, OrderType, SyncRunMode
 
 
 class CopyEngine:
@@ -127,18 +129,29 @@ class CopyEngine:
         )
         results: list[OrderResult] = []
         errors: list[str] = []
-        for order in orders:
+        sell_orders = [order for order in orders if order.side == OrderSide.SELL]
+        buy_orders = [order for order in orders if order.side == OrderSide.BUY]
+        stop_buy_execution = False
+
+        for order in sell_orders:
             if order.mode == SyncRunMode.DRY_RUN:
                 continue
+            executable_order = replace(order, order_type=OrderType.MARKET, limit_price=None)
             try:
-                slave_client.assert_live_supported()
-                results.append(await slave_client.place_market_order(order))
+                slave_client.assert_order_supported(executable_order)
+                results.append(await slave_client.place_order(executable_order))
             except BrokerFeatureUnavailable as error:
                 errors.append(str(error))
+                stop_buy_execution = True
                 break
             except Exception as error:
                 errors.append(str(error))
-                await logManager.log_error_message_async(error, "Order")
+                await logManager.log_error_message_async(error, "Sell Order")
+
+        if buy_orders and not stop_buy_execution:
+            buy_results, buy_errors = await self._execute_buy_orders(group, slave_client, buy_orders)
+            results.extend(buy_results)
+            errors.extend(buy_errors)
 
         return {
             "snapshot": slave_snapshot.to_dict(),
@@ -148,6 +161,63 @@ class CopyEngine:
             "orders_raw": orders,
             "results_raw": results,
         }
+
+    async def _execute_buy_orders(
+        self,
+        group: CopyGroupConfig,
+        slave_client: BrokerClient,
+        buy_orders: list[TargetOrder],
+    ) -> tuple[list[OrderResult], list[str]]:
+        results: list[OrderResult] = []
+        errors: list[str] = []
+        live_orders = [order for order in buy_orders if order.mode == SyncRunMode.LIVE]
+        if not live_orders:
+            return results, errors
+
+        cash_snapshot = await slave_client.get_portfolio_snapshot()
+        available_cash = max(0.0, cash_snapshot.cash * (1.0 - group.cash_safety_buffer))
+
+        for order in live_orders:
+            try:
+                quote: Quote = await slave_client.get_quote(order.symbol, order.exchange)
+                ask_price = quote.ask_price_1
+                if ask_price <= 0:
+                    errors.append(f"{order.instrument_key} has no ask_price_1; buy order skipped")
+                    break
+
+                quantity = min(order.quantity, floor(available_cash / ask_price))
+                if quantity <= 0:
+                    errors.append(f"insufficient cash for {order.instrument_key}; remaining buy orders stopped")
+                    break
+
+                estimated_value = quantity * ask_price
+                if estimated_value < group.min_trade_value:
+                    errors.append(
+                        f"{order.instrument_key} adjusted buy value is below min_trade_value; remaining buy orders stopped"
+                    )
+                    break
+
+                executable_order = replace(
+                    order,
+                    quantity=quantity,
+                    estimated_price=ask_price,
+                    estimated_value=estimated_value,
+                    order_type=OrderType.LIMIT,
+                    limit_price=ask_price,
+                    reason="master_weight_sync_buy_at_ask1",
+                )
+                slave_client.assert_order_supported(executable_order)
+                results.append(await slave_client.place_order(executable_order))
+                available_cash -= estimated_value
+            except BrokerFeatureUnavailable as error:
+                errors.append(str(error))
+                break
+            except Exception as error:
+                errors.append(str(error))
+                await logManager.log_error_message_async(error, "Buy Order")
+                break
+
+        return results, errors
 
     async def on_timer_update(self) -> None:
         if self.pause:

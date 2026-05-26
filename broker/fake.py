@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from core.schemas import Holding, OrderResult, PortfolioSnapshot, TargetOrder
+from core.schemas import Holding, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import OrderSide
 
 from .base import BrokerCapabilities, BrokerClient, BrokerCredentials
@@ -18,6 +18,7 @@ class FakeBrokerClient(BrokerClient):
             cash=0.0,
             holdings=[],
         )
+        self.quotes: dict[str, Quote] = {}
 
     async def connect(self) -> bool:
         self.connected = True
@@ -34,14 +35,23 @@ class FakeBrokerClient(BrokerClient):
         snapshot.captured_at = snapshot.captured_at
         return snapshot
 
-    async def get_quote(self, symbol: str, exchange: str = "") -> float:
+    async def get_quote(self, symbol: str, exchange: str = "") -> Quote:
         key = f"{exchange}:{symbol}" if exchange else symbol
+        if key in self.quotes:
+            return self.quotes[key]
         for holding in self.snapshot.holdings:
             if holding.key == key:
-                return holding.current_price
-        return 0.0
+                return Quote(
+                    symbol=symbol,
+                    exchange=exchange,
+                    last_price=holding.current_price,
+                    ask_price_1=holding.current_price,
+                    bid_price_1=holding.current_price,
+                    currency=holding.currency,
+                )
+        return Quote(symbol=symbol, exchange=exchange)
 
-    async def place_market_order(self, order: TargetOrder) -> OrderResult:
+    async def place_order(self, order: TargetOrder) -> OrderResult:
         self.orders.append(order)
         self._apply_order(order)
         return OrderResult(order=order, accepted=True, order_id=f"fake-{len(self.orders)}")
@@ -52,6 +62,7 @@ class FakeBrokerClient(BrokerClient):
             supports_domestic_stock=True,
             supports_global_stock=True,
             supports_market_order=True,
+            supports_limit_order=True,
             supports_live_trading=True,
             notes="in-memory test broker",
         )
@@ -75,6 +86,9 @@ class FakeBrokerClient(BrokerClient):
         holding.quantity = max(0, holding.quantity + signed_qty)
         holding.current_price = order.estimated_price
         holding.market_value = holding.quantity * holding.current_price
+
+        if order.side == OrderSide.BUY and order.estimated_value > self.snapshot.cash:
+            raise ValueError("not enough cash")
 
         cash_delta = order.estimated_value * (-1 if order.side == OrderSide.BUY else 1)
         self.snapshot.cash += cash_delta

@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import floor
 
 from .schemas import AccountConfig, CopyGroupConfig, Holding, PortfolioSnapshot, TargetOrder
-from .types import AccountMode, OrderSide, SyncRunMode
+from .types import AccountMode, OrderSide, OrderType, SyncRunMode
 
 
 class PortfolioRebalancer:
@@ -58,6 +58,8 @@ class PortfolioRebalancer:
                     estimated_price=price,
                     estimated_value=estimated_value,
                     mode=mode,
+                    order_type=OrderType.LIMIT if diff_qty > 0 else OrderType.MARKET,
+                    limit_price=price if diff_qty > 0 else None,
                     reason="master_weight_sync",
                 )
             )

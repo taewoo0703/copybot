@@ -55,3 +55,4 @@ copy_groups:
     mode: dry_run
     poll_interval_seconds: 60
     min_trade_value: 10000
+    cash_safety_buffer: 0.02

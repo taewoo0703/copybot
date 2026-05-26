@@ -2,7 +2,7 @@ import unittest
 
 from core.PortfolioRebalancer import PortfolioRebalancer
 from core.schemas import AccountConfig, CopyGroupConfig, Holding, PortfolioSnapshot
-from core.types import AccountMode, BrokerName, MarketScope, OrderSide, SyncRunMode
+from core.types import AccountMode, BrokerName, MarketScope, OrderSide, OrderType, SyncRunMode
 
 
 class PortfolioRebalancerTests(unittest.TestCase):
@@ -39,6 +39,7 @@ class PortfolioRebalancerTests(unittest.TestCase):
             ("A", OrderSide.BUY, 3),
             ("B", OrderSide.BUY, 1),
         ])
+        self.assertTrue(all(order.order_type == OrderType.LIMIT for order in orders))
         self.assertTrue(all(order.mode == SyncRunMode.DRY_RUN for order in orders))
 
     def test_sells_slave_only_positions_first(self):
@@ -62,9 +63,11 @@ class PortfolioRebalancerTests(unittest.TestCase):
 
         self.assertEqual(orders[0].symbol, "C")
         self.assertEqual(orders[0].side, OrderSide.SELL)
+        self.assertEqual(orders[0].order_type, OrderType.MARKET)
         self.assertEqual(orders[0].quantity, 2)
         self.assertEqual(orders[1].symbol, "A")
         self.assertEqual(orders[1].side, OrderSide.BUY)
+        self.assertEqual(orders[1].order_type, OrderType.LIMIT)
 
     def test_min_trade_value_skips_small_orders(self):
         group = CopyGroupConfig(

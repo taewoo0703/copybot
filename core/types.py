@@ -25,6 +25,11 @@ class OrderSide(str, Enum):
     SELL = "sell"
 
 
+class OrderType(str, Enum):
+    MARKET = "market"
+    LIMIT = "limit"
+
+
 class SyncRunMode(str, Enum):
     DRY_RUN = "dry_run"
     LIVE = "live"

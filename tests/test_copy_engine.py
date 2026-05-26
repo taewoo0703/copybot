@@ -1,8 +1,8 @@
 import unittest
 
 from core.CopyEngine import CopyEngine
-from core.schemas import AccountConfig, CopyBotConfig, Holding, PortfolioSnapshot
-from core.types import AccountMode, BrokerName, MarketScope
+from core.schemas import AccountConfig, CopyBotConfig, Holding, PortfolioSnapshot, Quote
+from core.types import AccountMode, BrokerName, MarketScope, OrderSide, OrderType
 
 
 def fake_account(account_id, mode=AccountMode.DRY_RUN):
@@ -136,11 +136,108 @@ class CopyEngineTests(unittest.IsolatedAsyncioTestCase):
             total_equity=1000,
         )
         engine.registry.get_client("slave").snapshot = fake_snapshot("slave", [], cash=1000, total_equity=1000)
+        engine.registry.get_client("slave").quotes["KRX:A"] = Quote(
+            symbol="A",
+            exchange="KRX",
+            last_price=100,
+            ask_price_1=105,
+            bid_price_1=99,
+        )
 
         await engine.sync_group("g1", force=True)
         slave_client = engine.registry.get_client("slave")
 
         self.assertEqual(len(slave_client.orders), 1)
+        self.assertEqual(slave_client.orders[0].order_type, OrderType.LIMIT)
+        self.assertEqual(slave_client.orders[0].limit_price, 105)
+
+    async def test_live_buy_quantity_is_limited_by_cash_buffer(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master").to_dict(),
+                    fake_account("slave", mode=AccountMode.LIVE).to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g1",
+                        "master_account_id": "master",
+                        "slave_account_ids": ["slave"],
+                        "mode": "live",
+                        "cash_safety_buffer": 0.02,
+                    }
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave").snapshot = fake_snapshot("slave", [], cash=250, total_equity=1000)
+        engine.registry.get_client("slave").quotes["KRX:A"] = Quote(
+            symbol="A",
+            exchange="KRX",
+            last_price=100,
+            ask_price_1=100,
+            bid_price_1=99,
+        )
+
+        await engine.sync_group("g1", force=True)
+        slave_client = engine.registry.get_client("slave")
+
+        self.assertEqual(len(slave_client.orders), 1)
+        self.assertEqual(slave_client.orders[0].quantity, 2)
+        self.assertEqual(slave_client.orders[0].estimated_value, 200)
+
+    async def test_live_sells_are_market_then_buys_use_refreshed_cash(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master").to_dict(),
+                    fake_account("slave", mode=AccountMode.LIVE).to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g1",
+                        "master_account_id": "master",
+                        "slave_account_ids": ["slave"],
+                        "mode": "live",
+                        "cash_safety_buffer": 0.02,
+                    }
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave").snapshot = fake_snapshot(
+            "slave",
+            [{"symbol": "C", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            cash=0,
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave").quotes["KRX:A"] = Quote(
+            symbol="A",
+            exchange="KRX",
+            last_price=100,
+            ask_price_1=100,
+            bid_price_1=99,
+        )
+
+        await engine.sync_group("g1", force=True)
+        slave_client = engine.registry.get_client("slave")
+
+        self.assertEqual([order.side for order in slave_client.orders], [OrderSide.SELL, OrderSide.BUY])
+        self.assertEqual(slave_client.orders[0].order_type, OrderType.MARKET)
+        self.assertEqual(slave_client.orders[1].order_type, OrderType.LIMIT)
+        self.assertEqual(slave_client.orders[1].quantity, 9)
 
 
 if __name__ == "__main__":

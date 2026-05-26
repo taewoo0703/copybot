@@ -6,8 +6,8 @@ import os
 import re
 from typing import Any
 
-from core.schemas import AccountConfig, OrderResult, PortfolioSnapshot, TargetOrder
-from core.types import MarketScope
+from core.schemas import AccountConfig, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from core.types import MarketScope, OrderType
 
 
 class BrokerError(Exception):
@@ -24,6 +24,7 @@ class BrokerCapabilities:
     supports_domestic_stock: bool = False
     supports_global_stock: bool = False
     supports_market_order: bool = False
+    supports_limit_order: bool = False
     supports_live_trading: bool = False
     supports_fractional_quantity: bool = False
     notes: str = ""
@@ -41,6 +42,7 @@ class BrokerCapabilities:
             "supports_domestic_stock": self.supports_domestic_stock,
             "supports_global_stock": self.supports_global_stock,
             "supports_market_order": self.supports_market_order,
+            "supports_limit_order": self.supports_limit_order,
             "supports_live_trading": self.supports_live_trading,
             "supports_fractional_quantity": self.supports_fractional_quantity,
             "notes": self.notes,
@@ -115,12 +117,15 @@ class BrokerClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_quote(self, symbol: str, exchange: str = "") -> float:
+    async def get_quote(self, symbol: str, exchange: str = "") -> Quote:
         raise NotImplementedError
 
     @abstractmethod
-    async def place_market_order(self, order: TargetOrder) -> OrderResult:
+    async def place_order(self, order: TargetOrder) -> OrderResult:
         raise NotImplementedError
+
+    async def place_market_order(self, order: TargetOrder) -> OrderResult:
+        return await self.place_order(order)
 
     @abstractmethod
     def get_capabilities(self) -> BrokerCapabilities:
@@ -138,12 +143,19 @@ class BrokerClient(ABC):
         }
 
     def assert_live_supported(self) -> None:
+        self.assert_order_supported()
+
+    def assert_order_supported(self, order: TargetOrder | None = None) -> None:
         capabilities = self.get_capabilities()
         if not capabilities.supports_scope(self.account.market_scope):
             raise BrokerFeatureUnavailable(
                 f"{self.account.broker.value} does not support {self.account.market_scope.value}"
             )
-        if not capabilities.supports_market_order:
-            raise BrokerFeatureUnavailable(f"{self.account.broker.value} does not support market orders")
         if not capabilities.supports_live_trading:
             raise BrokerFeatureUnavailable(f"{self.account.broker.value} live trading is disabled")
+        if order is None:
+            return
+        if order.order_type == OrderType.MARKET and not capabilities.supports_market_order:
+            raise BrokerFeatureUnavailable(f"{self.account.broker.value} does not support market orders")
+        if order.order_type == OrderType.LIMIT and not capabilities.supports_limit_order:
+            raise BrokerFeatureUnavailable(f"{self.account.broker.value} does not support limit orders")
