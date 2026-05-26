@@ -1,0 +1,147 @@
+import unittest
+
+from core.CopyEngine import CopyEngine
+from core.schemas import AccountConfig, CopyBotConfig, Holding, PortfolioSnapshot
+from core.types import AccountMode, BrokerName, MarketScope
+
+
+def fake_account(account_id, mode=AccountMode.DRY_RUN):
+    return AccountConfig(
+        account_id=account_id,
+        broker=BrokerName.FAKE,
+        market_scope=MarketScope.DOMESTIC,
+        credentials_ref=account_id,
+        mode=mode,
+    )
+
+
+def fake_snapshot(account_id, holdings, cash=0, total_equity=None):
+    if total_equity is None:
+        total_equity = cash + sum(item["quantity"] * item["current_price"] for item in holdings)
+    return PortfolioSnapshot(
+        account_id=account_id,
+        total_equity=total_equity,
+        cash=cash,
+        holdings=[
+            Holding(
+                symbol=item["symbol"],
+                exchange=item.get("exchange", ""),
+                quantity=item["quantity"],
+                current_price=item["current_price"],
+                market_value=item.get("market_value", item["quantity"] * item["current_price"]),
+            )
+            for item in holdings
+        ],
+    )
+
+
+class CopyEngineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dry_run_does_not_place_orders(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master").to_dict(),
+                    fake_account("slave").to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g1",
+                        "master_account_id": "master",
+                        "slave_account_ids": ["slave"],
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave").snapshot = fake_snapshot("slave", [], cash=1000, total_equity=1000)
+
+        state = await engine.sync_group("g1", force=True)
+        slave_client = engine.registry.get_client("slave")
+
+        self.assertEqual(len(state["last_orders"]), 1)
+        self.assertEqual(slave_client.orders, [])
+
+    async def test_multiple_master_trees_are_independent(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master-a").to_dict(),
+                    fake_account("slave-a").to_dict(),
+                    fake_account("master-b").to_dict(),
+                    fake_account("slave-b").to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g-a",
+                        "master_account_id": "master-a",
+                        "slave_account_ids": ["slave-a"],
+                    },
+                    {
+                        "group_id": "g-b",
+                        "master_account_id": "master-b",
+                        "slave_account_ids": ["slave-b"],
+                    },
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master-a").snapshot = fake_snapshot(
+            "master-a",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave-a").snapshot = fake_snapshot("slave-a", [], cash=1000, total_equity=1000)
+        engine.registry.get_client("master-b").snapshot = fake_snapshot(
+            "master-b",
+            [{"symbol": "B", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave-b").snapshot = fake_snapshot("slave-b", [], cash=1000, total_equity=1000)
+
+        await engine.sync_group("g-a", force=True)
+
+        self.assertEqual(engine.group_state["g-a"]["last_orders"][0]["symbol"], "A")
+        self.assertEqual(engine.group_state["g-b"]["last_orders"], [])
+
+    async def test_live_mode_places_orders_when_supported(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master").to_dict(),
+                    fake_account("slave", mode=AccountMode.LIVE).to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g1",
+                        "master_account_id": "master",
+                        "slave_account_ids": ["slave"],
+                        "mode": "live",
+                    }
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        engine.registry.get_client("slave").snapshot = fake_snapshot("slave", [], cash=1000, total_equity=1000)
+
+        await engine.sync_group("g1", force=True)
+        slave_client = engine.registry.get_client("slave")
+
+        self.assertEqual(len(slave_client.orders), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

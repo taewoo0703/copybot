@@ -1,37 +1,34 @@
 const outputElement = document.getElementById("output");
 
-// Utility function to send requests
 async function sendRequest(url, method = "GET", body = null) {
     try {
         const options = { method, headers: { "Content-Type": "application/json" } };
         if (body) options.body = JSON.stringify(body);
 
         const response = await fetch(url, options);
+        const contentType = response.headers.get("content-type") || "";
+        const result = contentType.includes("application/json")
+            ? await response.json()
+            : await response.text();
+
         if (!response.ok) {
-            throw new Error(`Error: ${response.status} ${response.statusText}`);
+            throw new Error(typeof result === "string" ? result : JSON.stringify(result));
         }
 
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-            const result = await response.json();
-            outputElement.textContent = JSON.stringify(result, null, 2);
-        } else if (contentType && contentType.includes("text/html")) {
-            const result = await response.text();
-            outputElement.innerHTML = result; // HTML을 직접 삽입
-        } else {
-            throw new Error("Unsupported response type");
-        }
+        outputElement.textContent = typeof result === "string"
+            ? result
+            : JSON.stringify(result, null, 2);
     } catch (error) {
         outputElement.textContent = `Error: ${error.message}`;
     }
 }
 
-// Event handlers for each section
 document.body.addEventListener("click", (event) => {
     const action = event.target.dataset.action;
-    console.log("Action:", action); // Add this line to debug
     if (!action) return;
 
+    const passwordInput = document.getElementById("password");
+    const password = passwordInput ? passwordInput.value.trim() : "";
     let url = "";
     let body = null;
     
@@ -44,30 +41,27 @@ document.body.addEventListener("click", (event) => {
         case "log-warning":
         case "log-error":
         case "log-critical":
-            body = { log_level: action.replace("log-", "").toUpperCase() };
+            body = { password, log_level: action.replace("log-", "").toUpperCase() };
             url = "/log_level";
             break;
-        case "apply-betting-params":
-            const slave1Multiple = parseInt(document.getElementById("betting-slave1-multiple").value);
-            const slave2Multiple = parseInt(document.getElementById("betting-slave2-multiple").value);
-            body = {
-                betting_params: {
-                    slave1_multiple: slave1Multiple,
-                    slave2_multiple: slave2Multiple
-                }
-            };
-            url = "/set_betting_params";
+        case "reload-config":
+            body = { password };
+            url = "/config/reload";
             break;
-        case "view-params":
-            body = { password: document.getElementById("password").value.trim() };
-            url = "/view_params";
+        case "trigger-sync":
+            const groupIdInput = document.getElementById("sync-group-id");
+            const groupId = groupIdInput ? groupIdInput.value.trim() : "";
+            body = { password, group_id: groupId || null };
+            url = "/sync/trigger";
+            break;
+        case "view-config":
+            body = { password };
+            url = "/view_config";
             break;
         case "view-status":
-            body = { password: document.getElementById("password").value.trim() };
+            body = { password };
             url = "/view_status";
             break;
-
-        ////////////////////////////  admin.html  ////////////////////////////
         case "on-whitelist":
             url = "/use_whitelist/1";
             break;
@@ -75,12 +69,12 @@ document.body.addEventListener("click", (event) => {
             url = "/use_whitelist/0";
             break;
         case "pause-operation":
-            body = { password: document.getElementById("password").value.trim() };
-            url = "/pause"
+            body = { password };
+            url = "/pause";
             break;
         case "resume-operation":
-            body = { password: document.getElementById("password").value.trim() };
-            url = "/resume"
+            body = { password };
+            url = "/resume";
             break;
 
         ////////////////////////////  default  ////////////////////////////
@@ -88,12 +82,6 @@ document.body.addEventListener("click", (event) => {
             alert("Unknown action!");
             return;
     }
-
-    // Add password to the body
-    if (body) {
-        const password = document.getElementById("password").value.trim();
-        body.password = password;
-    } 
 
     sendRequest(url, body ? "POST" : "GET", body);
 });

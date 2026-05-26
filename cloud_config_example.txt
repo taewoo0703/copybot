@@ -94,25 +94,25 @@ write_files:
 - path: /root/.env
   content: |
     PASSWORD=""
-    MASTER_APP_KEY=""
-    MASTER_SECRET_KEY=""
-    SLAVE1_APP_KEY=""
-    SLAVE1_SECRET_KEY=""
-    SLAVE2_APP_KEY=""
-    SLAVE2_SECRET_KEY=""
+    COPYBOT_CONFIG_PATH="/root/copybot/config/copybot.yaml"
+    # Broker credentials are read by credentials_ref.
+    # Example for credentials_ref: DOMESTIC_MASTER
+    # DOMESTIC_MASTER_APP_KEY=""
+    # DOMESTIC_MASTER_APP_SECRET=""
+    # DOMESTIC_MASTER_ACCOUNT_NO=""
     DISCORD_WEBHOOK_URL=""
     WHITELIST=[]
     PORT="80"
     USE_WHITELIST="0"
 - path: /etc/environment
   content: |
-    DOMAIN="lscopybot.co.kr"
-    APP_NAME="lscopybot"
+    DOMAIN="copybot.co.kr"
+    APP_NAME="copybot"
     KILL_TIMEOUT="600000"
   append: true
 - path: /etc/caddy/Caddyfile
   content: |
-    lscopybot.co.kr {
+    copybot.co.kr {
       reverse_proxy 127.0.0.1:8000
     }
 - path: /root/.bash_functions
@@ -132,7 +132,7 @@ write_files:
     fi
 
     if [[ -z "$APP_NAME" ]]; then
-      app_name="lscopybot"
+      app_name="copybot"
     else
       app_name=$APP_NAME
     fi
@@ -214,12 +214,12 @@ write_files:
       pm2 start "$app_dir/run.py" --name "$app_name" --interpreter "$interpreter_path" --kill-timeout $kill_timeout -- --port="$port"
     }
 
-    download_lscopybot() {
-      git clone https://github.com/taewoo0703/lscopybot.git "$app_dir"
+    download_copybot() {
+      git clone https://github.com/taewoo0703/copybot.git "$app_dir"
     }
 
     download() {
-      git clone https://github.com/taewoo0703/lscopybot.git "$app_dir"
+      git clone https://github.com/taewoo0703/copybot.git "$app_dir"
     }
 
     remove() {
@@ -264,7 +264,7 @@ write_files:
     export -f restart
     export -f activate
     export -f start
-    export -f download_lscopybot
+    export -f download_copybot
     export -f download
     export -f remove
     export -f install
@@ -299,13 +299,13 @@ runcmd:
   - mv caddy /usr/bin/
   - chmod +x /usr/bin/caddy
   - rm -rf caddy_*_linux_amd64.tar.gz
-  - git clone  "https://github.com/taewoo0703/lscopybot.git" /root/lscopybot
-  - python3.12 -m venv /root/lscopybot/.venv --system-site-packages
-  - /root/lscopybot/.venv/bin/python3.12 -m pip install -r /root/lscopybot/requirements.txt
+  - git clone  "https://github.com/taewoo0703/copybot.git" /root/copybot
+  - python3.12 -m venv /root/copybot/.venv --system-site-packages
+  - /root/copybot/.venv/bin/python3.12 -m pip install -r /root/copybot/requirements.txt
   - cd "/root"
   - |
       if [ -f /root/.env ]; then
-        cp /root/.env /root/lscopybot/.env
+        cp /root/.env /root/copybot/.env
         rm -f /root/.env
       fi
   - systemctl daemon-reload
@@ -319,7 +319,7 @@ runcmd:
   - systemctl start ntpd-sync.timer
   - systemctl enable caddy.service
   - systemctl start caddy.service
-  - pm2 start "/root/lscopybot/run.py" --name "lscopybot" --interpreter "/root/lscopybot/.venv/bin/python3.12" --kill-timeout 600000 -- --port=8000
+  - pm2 start "/root/copybot/run.py" --name "copybot" --interpreter "/root/copybot/.venv/bin/python3.12" --kill-timeout 600000 -- --port=8000
   - pm2 save
 power_state:
   delay: "now"

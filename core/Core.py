@@ -1,19 +1,15 @@
-from .LogManager import logManager
-from .schemas import *
-import asyncio, os, pickle, time
-from datetime import datetime, timedelta
-from settings import settings
+import asyncio
+import time
+
+from .CopyEngine import CopyEngine
 from .EmergencyControl import emergencyControl
-from .ExchangeManager import exchangeManager
+from .LogManager import logManager
 
 
 class Core:
     def __init__(self):
         self.emergency_control = emergencyControl
-        # save/load
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_dir = os.path.dirname(current_dir)  # core 폴더의 상위 폴더 (프로젝트 루트)
-        self.params_dir = os.path.join(project_dir, "params")
+        self.copy_engine = CopyEngine()
         # loop
         self.active = True  # loop active
         # tasks
@@ -21,10 +17,8 @@ class Core:
         self.emergency_task = None
 
     async def initialize(self):
-        # load all parameters
-        logManager.debug(f"params directory: {self.params_dir}")
-        _betting_params = self.load_params()
-        self.set_betting_params(_betting_params, False)
+        # Init Copy Engine (reload config)
+        await self.copy_engine.initialize()
 
         # set timer
         self.timer_task = asyncio.create_task(self.timer_update_1s())
@@ -33,13 +27,7 @@ class Core:
         # start emergency control loop
         self.emergency_task = asyncio.create_task(self.emergency_control_loop())
 
-        # init ExchangeManager
-        await exchangeManager.initialize()
-
     async def on_shutdown(self):
-        # save all parameters
-        self.save_params()
-
         # set active false to stop loops
         self.active = False
 
@@ -60,51 +48,6 @@ class Core:
 
         # shutdown complete
         await logManager.log_message_async("shutdown complete!")
-
-
-    ##############################
-    # Parameter setting
-    ##############################
-    def set_betting_params(self, _betting_params: BettingParams, save:bool = True):
-        global betting_params
-        if _betting_params is not None:
-            betting_params = _betting_params
-        if save:
-            self.save_betting_params()
-
-
-    ##############################
-    # Save/Load parameters
-    ##############################
-    def save_betting_params(self):
-        if not os.path.exists(self.params_dir):
-            os.makedirs(self.params_dir)
-        
-        with open(os.path.join(self.params_dir, "betting_params.pkl"), "wb") as f:
-            pickle.dump(betting_params, f)
-
-    def save_params(self):
-        self.save_betting_params()
-
-    def check_file(self, parent_dir: str, file_name: str) -> bool:
-        file_path = os.path.join(parent_dir, file_name)
-        if not os.path.exists(parent_dir):
-            return False
-        if not os.path.isfile(file_path):
-            return False
-        return True
-
-    def load_betting_params(self):
-        if self.check_file(self.params_dir, "betting_params.pkl"):
-            with open(os.path.join(self.params_dir, "betting_params.pkl"), "rb") as f:
-                return pickle.load(f)
-        else:
-            return None
-
-    def load_params(self):
-        _betting_params= self.load_betting_params()
-        return _betting_params
-
 
     ##############################
     # Emergency Control loop
@@ -132,8 +75,8 @@ class Core:
         """
         update timer에 의해 호출되는 메서드
         """
-        await exchangeManager.on_timer_update()
-        logManager.trace(f"on_timer_update - {timeframe} 완료")
+        await self.copy_engine.on_timer_update()
+        logManager.trace(f"on_timer_update - {timeframe} complete")
 
     # done call back - update
     def timer_update_done_callback(self, task):
@@ -145,44 +88,51 @@ class Core:
                 logManager.log_error_message(task.exception(), "update error")
             else:
                 logManager.log_message("update done")
-        except Exception as e:
-            logManager.log_error_message(e, "update error")
+        except Exception as error:
+            logManager.log_error_message(error, "update error")
 
 
-    ##############################
-    # User Control
-    ##############################
+    ################################
+    # API methods
+    ################################
+    async def reload_config(self):
+        """
+        설정 재로드 메서드. API에서 호출됨.
+        - 설정을 재로드하고, 동기화까지 수행. 동기화는 설정 로드 후에 수행하여, 새 설정이 즉시 반영되도록 함.
+        """
+        return await self.copy_engine.reload_config(sync_after_load=True)
+
+    async def trigger_sync(self, group_id: str | None = None):
+        """
+        그룹 동기화 트리거 메서드. API에서 호출됨.
+        - group_id: 특정 그룹 ID를 지정하면 해당 그룹만 동기화, None이면 모든 그룹 동기화
+        """
+        if group_id:
+            return await self.copy_engine.sync_group(group_id, force=True)
+        return await self.copy_engine.sync_all(force=True)
+
     def set_pause(self, pause: bool) -> None:
-        exchangeManager.set_pause(pause)
+        """
+        시스템 일시정지 설정 메서드. API에서 호출됨.
+        - pause: True로 설정하면 시스템이 일시정지되고, False로 설정하면 재개됨.
+        """
+        self.copy_engine.set_pause(pause)
 
-    def get_status(self) -> dict:
+    def view_status(self) -> dict:
         """
-        master, slave1, slave2 연결 여부, 포지션 상태 반환
+        시스템 상태를 반환하는 메서드. API에서 호출됨.
+         - paused: 시스템 일시정지 여부
+         - accounts: 계정별 상태 정보
+         - groups: 그룹별 상태 정보
+         - next_poll_at: 그룹별 다음 동기화 예정 시간
         """
-        result = {
-            "connections": {
-                "master_connected": exchangeManager.master.connected,
-                "slave1_connected": exchangeManager.slave1.connected,
-                "slave2_connected": exchangeManager.slave2.connected,
-            },
-            "positions": {
-                "master_positions": exchangeManager.master_positions,
-                "slave1_positions": exchangeManager.slave1_positions,
-                "slave2_positions": exchangeManager.slave2_positions,
-            }
-        }
-        return result
-    
-    def get_params(self) -> dict:
+        return self.copy_engine.get_status()
+
+    def view_config(self) -> dict:
         """
-        현재 betting params 반환
+        현재 로드된 설정을 반환하는 메서드. API에서 호출됨.
         """
-        result = {
-            "betting_params": betting_params
-        }
-        return result
+        return self.copy_engine.get_config()
 
 
-            
-# singleton
 core: Core = Core()

@@ -1,31 +1,31 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home</title>
+    <title>Copy Trading Bot</title>
     <style>
         body {
             font-family: Arial, sans-serif;
+            margin: 24px;
         }
         label {
             display: flex;
-            margin-bottom: 5px;
+            margin-bottom: 10px;
             align-items: center;
             gap: 10px;
         }
         section {
             margin-bottom: 20px;
-            padding: 10px;
+            padding: 12px;
             border: 1px solid #ccc;
         }
-        input, button, select {
+        input, button {
             margin-bottom: 10px;
             font-size: 16px;
         }
-        #password {
-            display: inline-block;
-            width: auto;
+        #password, #sync-group-id {
+            width: 240px;
         }
         #output {
             margin-top: 20px;
@@ -33,25 +33,20 @@
             border: 1px solid #000;
             background-color: #f9f9f9;
             white-space: pre-wrap;
-            font-size: 16px;
-        }
-        #monitoring-exchange-name {
-            width: 100%;
+            font-size: 14px;
+            overflow: auto;
         }
     </style>
 </head>
 <body>
-    <h1>Home</h1>
+    <h1>Copy Trading Bot</h1>
 
-    <!-- Password -->
     <label>Password:
-        <input type="text" id="password" placeholder="Enter password">
+        <input type="password" id="password" placeholder="Enter password">
     </label>
 
-    <!-- Debug Console -->
     <section>
         <h2>Debug Console</h2>
-        <label style="display: inline;">Log Level: </label>
         <button data-action="log-trace">Trace</button>
         <button data-action="log-debug">Debug</button>
         <button data-action="log-info">Info</button>
@@ -61,23 +56,18 @@
         <button data-action="log-critical">Critical</button>
     </section>
 
-    <!-- Betting Parameters -->
     <section>
-        <h2>Betting Parameters</h2>
-        <!-- Add betting parameters inputs and buttons here -->
-        <label>Slave 1 Multiple:
-            <input type="number" id="betting-slave1-multiple" placeholder="Enter Slave 1 Multiple" min="1" step="1">
-        </label>
-        <label>Slave 2 Multiple:
-            <input type="number" id="betting-slave2-multiple" placeholder="Enter Slave 2 Multiple" min="1" step="1">
-        </label>
-        <button data-action="apply-betting-params">Apply</button>
+        <h2>Configuration</h2>
+        <button data-action="reload-config">Reload Config</button>
+        <button data-action="view-config">View Config</button>
     </section>
-    
-    <!-- Monitoring -->
+
     <section>
-        <h2>Monitoring</h2>
-        <button data-action="view-params">View Params</button>
+        <h2>Synchronization</h2>
+        <label>Group ID:
+            <input type="text" id="sync-group-id" placeholder="Optional">
+        </label>
+        <button data-action="trigger-sync">Trigger Sync</button>
         <button data-action="view-status">View Status</button>
     </section>
 

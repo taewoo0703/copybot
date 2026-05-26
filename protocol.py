@@ -1,8 +1,6 @@
 from pydantic import BaseModel, validator, root_validator
 from settings import settings
 from utility import LOGGER_LEVEL_LITERAL, LOGGER_LEVELS
-from typing import Literal
-from core import BettingParams
 
 ############################################
 # base request
@@ -32,10 +30,14 @@ class BaseRequest(BaseModel):
     
 
 ############################################
-# params request
+# copybot requests
 ############################################
-class BettingParamsRequest(BaseRequest):
-    betting_params: BettingParams
+class ConfigReloadRequest(BaseRequest):
+    pass
+
+
+class SyncTriggerRequest(BaseRequest):
+    group_id: str | None = None
 
 
 ############################################
