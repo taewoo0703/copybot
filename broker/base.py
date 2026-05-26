@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 import re
 from typing import Any
@@ -54,12 +54,7 @@ class BrokerCredentials:
     ref: str
     app_key: str | None = None
     app_secret: str | None = None
-    account_no: str | None = None
-    account_password: str | None = None
-    access_token: str | None = None
-    base_url: str | None = None
     is_mock: bool = False
-    extra: dict[str, str] = field(default_factory=dict)
 
     @staticmethod
     def env_prefix(ref: str) -> str:
@@ -68,32 +63,11 @@ class BrokerCredentials:
     @classmethod
     def from_env(cls, ref: str) -> "BrokerCredentials":
         prefix = cls.env_prefix(ref)
-        known_keys = {
-            "APP_KEY",
-            "APP_SECRET",
-            "SECRET_KEY",
-            "ACCOUNT_NO",
-            "ACCOUNT_PASSWORD",
-            "ACCESS_TOKEN",
-            "BASE_URL",
-            "IS_MOCK",
-        }
-        extra = {
-            key[len(prefix) + 1 :]: value
-            for key, value in os.environ.items()
-            if key.startswith(f"{prefix}_") and key[len(prefix) + 1 :] not in known_keys
-        }
-        app_secret = os.getenv(f"{prefix}_APP_SECRET") or os.getenv(f"{prefix}_SECRET_KEY")
         return cls(
             ref=ref,
             app_key=os.getenv(f"{prefix}_APP_KEY"),
-            app_secret=app_secret,
-            account_no=os.getenv(f"{prefix}_ACCOUNT_NO"),
-            account_password=os.getenv(f"{prefix}_ACCOUNT_PASSWORD"),
-            access_token=os.getenv(f"{prefix}_ACCESS_TOKEN"),
-            base_url=os.getenv(f"{prefix}_BASE_URL"),
+            app_secret=os.getenv(f"{prefix}_APP_SECRET"),
             is_mock=(os.getenv(f"{prefix}_IS_MOCK", "0").lower() in {"1", "true", "yes", "on"}),
-            extra=extra,
         )
 
 

@@ -99,7 +99,7 @@ write_files:
     # Example for credentials_ref: DOMESTIC_MASTER
     # DOMESTIC_MASTER_APP_KEY=""
     # DOMESTIC_MASTER_APP_SECRET=""
-    # DOMESTIC_MASTER_ACCOUNT_NO=""
+    # DOMESTIC_MASTER_IS_MOCK="0"
     DISCORD_WEBHOOK_URL=""
     WHITELIST=[]
     PORT="80"

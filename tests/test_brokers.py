@@ -45,7 +45,7 @@ class BrokerImplementationTests(unittest.TestCase):
             BrokerCredentials(ref="KIWOOM_SLAVE", app_key="key", app_secret="secret"),
         )
 
-        self.assertEqual(db._token_request_body()["appsecret"], "secret")
+        self.assertEqual(db._token_request_body()["appsecretkey"], "secret")
         self.assertEqual(kiwoom._token_request_body()["secretkey"], "secret")
 
     def test_miraeasset_shell_is_not_live_capable(self):

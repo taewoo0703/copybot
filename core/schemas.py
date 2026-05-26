@@ -132,7 +132,6 @@ class AccountConfig:
     market_scope: MarketScope
     credentials_ref: str
     mode: AccountMode = AccountMode.DRY_RUN
-    base_url: str | None = None
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "AccountConfig":
@@ -142,7 +141,6 @@ class AccountConfig:
             market_scope=MarketScope(values["market_scope"]),
             credentials_ref=str(values.get("credentials_ref") or values["account_id"]),
             mode=AccountMode(values.get("mode", AccountMode.DRY_RUN.value)),
-            base_url=values.get("base_url"),
         )
 
     def to_dict(self) -> dict[str, Any]:
