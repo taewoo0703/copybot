@@ -7,10 +7,7 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-try:
-    import httpx
-except ImportError:  # pragma: no cover - exercised only when dependency is missing.
-    httpx = None
+import httpx
 
 from core.schemas import Holding, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import MarketScope, OrderSide, OrderType
@@ -187,8 +184,6 @@ class KiwoomBrokerClient(BrokerClient):
         )
 
     def _http_client(self):
-        if httpx is None:
-            raise BrokerFeatureUnavailable("httpx is required for Kiwoom broker requests")
         return httpx.AsyncClient(timeout=10)
 
     def _token_request_body(self) -> dict[str, str | None]:

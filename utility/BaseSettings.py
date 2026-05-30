@@ -5,11 +5,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import get_type_hints
 
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    def load_dotenv(*args, **kwargs):
-        return False
+from dotenv import load_dotenv
 
 
 @dataclass

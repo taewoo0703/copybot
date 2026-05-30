@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from settings import settings
 
 from .schemas import CopyBotConfig
@@ -29,10 +31,6 @@ def load_copybot_config(path: str | os.PathLike | None = None) -> CopyBotConfig:
 
 
 def _load_yaml(raw_text: str) -> dict[str, Any]:
-    try:
-        import yaml
-    except ImportError as error:
-        raise RuntimeError("PyYAML is required to load YAML config files") from error
     values = yaml.safe_load(raw_text) or {}
     if not isinstance(values, dict):
         raise ValueError("copybot YAML config must be an object")

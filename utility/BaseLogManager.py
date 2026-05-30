@@ -6,71 +6,8 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-try:
-    from loguru import logger
-except ImportError:
-    class _FallbackLogger:
-        def remove(self, *args, **kwargs):
-            return None
-
-        def add(self, *args, **kwargs):
-            return 0
-
-        def trace(self, message, *args, **kwargs):
-            print(message)
-
-        def debug(self, message, *args, **kwargs):
-            print(message)
-
-        def info(self, message, *args, **kwargs):
-            print(message)
-
-        def success(self, message, *args, **kwargs):
-            print(message)
-
-        def warning(self, message, *args, **kwargs):
-            print(message)
-
-        def error(self, message, *args, **kwargs):
-            print(message)
-
-        def critical(self, message, *args, **kwargs):
-            print(message)
-
-    logger = _FallbackLogger()
-
-try:
-    from dhooks import Webhook, Embed
-except ImportError:
-    class Embed:
-        def __init__(self, title: str = "", description: str = "", color: int = 0):
-            self.title = title
-            self.description = description
-            self.color = color
-            self.fields = []
-
-        def add_field(self, name: str, value: str, inline: bool = False):
-            self.fields.append({"name": name, "value": value, "inline": inline})
-
-    class Webhook:
-        def __init__(self, url: str):
-            self.url = url
-
-        def send(self, message: str = None, embed: Embed = None):
-            if embed:
-                logger.info(f"{embed.title} {embed.description}")
-            elif message:
-                logger.info(message)
-
-        class Async:
-            def __init__(self, url: str):
-                self.url = url
-
-            async def send(self, message: str = None, embed: Embed = None):
-                if embed:
-                    logger.info(f"{embed.title} {embed.description}")
-                elif message:
-                    logger.info(message)
+from dhooks import Webhook, Embed
+from loguru import logger
 
 
 LOGGER_LEVEL_LITERAL = Literal["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
