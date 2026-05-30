@@ -132,7 +132,11 @@ class KiwoomBrokerClient(BrokerClient):
             self._cash_request_body(),
             self.tr_ids["cash"],
         )
-        return self._parse_snapshot(balance, cash)
+        snapshot = self._parse_snapshot(balance, cash)
+        
+        from core.LogManager import logManager
+        await logManager.log_portfolio_snapshot_async(snapshot)
+        return snapshot
 
     async def get_quote(self, symbol: str, exchange: str = "") -> Quote:
         if self.account.market_scope != MarketScope.DOMESTIC:
@@ -362,8 +366,8 @@ class KiwoomBrokerClient(BrokerClient):
 
     def _balance_request_body(self) -> dict[str, Any]:
         # kt00018 계좌평가잔고내역 Input reference:
-        # - qry_tp: 조회 구분. 현재 구현은 잔고/평가 조회값 "1"을 사용한다.
-        # - dmst_stex_tp: 국내거래소 구분. KRX/NXT/SOR 중 기본 KRX를 사용한다.
+        # - qry_tp: 조회 구분. 현재 구현은 잔고/평가 조회값 "1"을 사용한다. (1:합산, 2:개별)
+        # - dmst_stex_tp: 국내거래소 구분. KRX/NXT/SOR 중 기본 KRX를 사용한다.  (KRX:한국거래소,NXT:넥스트트레이드)
         #
         # Output reference:
         # - acnt_evlt_remn_indv_tot[]: 보유종목 배열.
@@ -377,7 +381,7 @@ class KiwoomBrokerClient(BrokerClient):
 
     def _cash_request_body(self) -> dict[str, Any]:
         # kt00001 예수금상세현황 Input reference:
-        # - qry_tp: 조회 구분. 현재 구현은 예수금/주문가능금액 조회값 "2"를 사용한다.
+        # - qry_tp: 조회 구분. 현재 구현은 예수금/주문가능금액 조회값 "2"를 사용한다. (3:추정조회, 2:일반조회)
         #
         # Output reference:
         # - ord_alow_amt: 주문가능금액.

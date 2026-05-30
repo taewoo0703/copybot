@@ -23,7 +23,8 @@ class CopyEngine:
         self.config = CopyBotConfig()
         self.pause = False
         self.group_state: dict[str, dict[str, Any]] = {}
-        self.master_fingerprints: dict[str, tuple[tuple[str, int], ...]] = {}
+        self.master_fingerprints: dict[str, tuple[Any, ...]] = {}
+        self.master_snapshots: dict[str, PortfolioSnapshot] = {}
         self.next_poll_at: dict[str, float] = {}
 
     async def initialize(self) -> None:
@@ -41,6 +42,7 @@ class CopyEngine:
             for group in self.config.copy_groups
         }
         self.master_fingerprints.clear()
+        self.master_snapshots.clear()
         now = time.time()
         self.next_poll_at = {group.group_id: now for group in self.config.copy_groups}
         if sync_after_load:
@@ -70,7 +72,8 @@ class CopyEngine:
         try:
             master_client: BrokerClient = self.registry.get_client(group.master_account_id)
             master_snapshot: PortfolioSnapshot = await master_client.get_portfolio_snapshot()
-            fingerprint: tuple[tuple[str, int], ...] = master_snapshot.fingerprint()
+            fingerprint = self._master_fingerprint(master_snapshot)
+            previous_master_snapshot = self.master_snapshots.get(group_id)
             changed = self.master_fingerprints.get(group_id) != fingerprint
 
             state["last_master_snapshot"] = master_snapshot.to_dict()
@@ -79,6 +82,9 @@ class CopyEngine:
                 state["last_message"] = "master unchanged"
                 self.next_poll_at[group_id] = time.time() + group.poll_interval_seconds
                 return state
+
+            if changed and previous_master_snapshot is not None:
+                await logManager.log_master_position_changed_async(group, previous_master_snapshot, master_snapshot)
 
             all_orders: list[TargetOrder] = []
             all_results: list[OrderResult] = []
@@ -90,6 +96,7 @@ class CopyEngine:
                 all_results.extend(slave_state["results_raw"])
 
             self.master_fingerprints[group_id] = fingerprint
+            self.master_snapshots[group_id] = master_snapshot
             state["last_orders"] = [order.to_dict() for order in all_orders]
             state["last_results"] = [result.to_dict() for result in all_results]
             state["slaves"] = {
@@ -103,7 +110,11 @@ class CopyEngine:
             state["last_sync_at"] = time.time()
             state["last_message"] = f"synced {len(all_orders)} planned orders"
             self.next_poll_at[group_id] = time.time() + group.poll_interval_seconds
-            await logManager.log_sync_message_async(group_id, state["last_message"])
+            refreshed_slave_snapshots = [
+                await self.registry.get_client(slave_id).get_portfolio_snapshot()
+                for slave_id in group.slave_account_ids
+            ]
+            await logManager.log_group_weight_comparison_async(group, master_snapshot, refreshed_slave_snapshots)
             return state
         except Exception as error:
             state["last_error"] = str(error)
@@ -127,6 +138,8 @@ class CopyEngine:
             slave=slave_snapshot,
             slave_account=slave_client.account,
         )
+        if orders:
+            await logManager.log_rebalance_orders_async(group, master_snapshot, slave_snapshot, orders)
         results: list[OrderResult] = []
         errors: list[str] = []
         sell_orders = [order for order in orders if order.side == OrderSide.SELL]
@@ -152,6 +165,9 @@ class CopyEngine:
             buy_results, buy_errors = await self._execute_buy_orders(group, slave_client, buy_orders)
             results.extend(buy_results)
             errors.extend(buy_errors)
+
+        if errors:
+            await logManager.log_slave_sync_errors_async(group, slave_id, errors)
 
         return {
             "snapshot": slave_snapshot.to_dict(),
@@ -266,3 +282,20 @@ class CopyEngine:
             "last_polled_at": None,
             "master_changed": None,
         }
+
+    def _master_fingerprint(self, snapshot: PortfolioSnapshot) -> tuple[Any, ...]:
+        return (
+            ("cash", round(snapshot.cash, 4)),
+            ("total_equity", round(snapshot.total_equity, 4)),
+            *tuple(
+                sorted(
+                    (
+                        holding.key,
+                        holding.quantity,
+                        round(holding.current_price, 4),
+                        round(holding.market_value, 4),
+                    )
+                    for holding in snapshot.holdings
+                )
+            ),
+        )

@@ -140,20 +140,25 @@ class DBBrokerClient(BrokerClient):
     async def get_portfolio_snapshot(self) -> PortfolioSnapshot:
         # copybot은 "포트폴리오 스냅샷"이라는 공통 모델을 사용한다.
         # DB 응답의 현금/평가금액/보유종목 필드를 읽어 PortfolioSnapshot으로 정규화한다.
+        snapshot: PortfolioSnapshot = None
         if self.account.market_scope == MarketScope.DOMESTIC:
             payload = await self._request_all_pages(
                 self.domestic_balance_path,
                 self._domestic_balance_body(),
                 self.tr_ids["domestic_balance"],
             )
-            return self._parse_domestic_snapshot(payload)
+            snapshot = self._parse_domestic_snapshot(payload)
+        else:
+            payload = await self._request_all_pages(
+                self.global_balance_path,
+                self._global_balance_body(),
+                self.tr_ids["global_balance"],
+            )
+            snapshot = self._parse_global_snapshot(payload)
 
-        payload = await self._request_all_pages(
-            self.global_balance_path,
-            self._global_balance_body(),
-            self.tr_ids["global_balance"],
-        )
-        return self._parse_global_snapshot(payload)
+        from core.LogManager import logManager
+        await logManager.log_portfolio_snapshot_async(snapshot)
+        return snapshot
 
     async def get_quote(self, symbol: str, exchange: str = "") -> Quote:
         # 현재가 조회에서 ask/bid 1호가가 같이 내려오지 않는 경우가 있어,
@@ -192,7 +197,7 @@ class DBBrokerClient(BrokerClient):
             self.tr_ids["global_hoga"],
         )
         return self._parse_quote(symbol, exchange, hoga_payload, fallback=quote)
-
+    
     async def place_order(self, order: TargetOrder) -> OrderResult:
         # TargetOrder는 copybot 내부 주문 모델이다.
         # 여기서 국내/해외 TR과 DB body 필드명으로 변환한 뒤 주문 API에 전달한다.
@@ -364,7 +369,7 @@ class DBBrokerClient(BrokerClient):
 
     def _domestic_balance_body(self) -> dict[str, Any]:
         # CSPAQ03420 Input reference:
-        # - In.QryTpCode: 잔고 조회 구분. 현재 구현은 전체/기본 조회 용도로 "0"을 사용한다.
+        # - In.QryTpCode: 잔고 조회 구분. 현재 구현은 전체/기본 조회 용도로 "0"을 사용한다. (0:전체, 1:비상장제외, 2:비상장,코넥스,kotc 제외)
         #
         # Output reference:
         # - Out: 계좌 요약. Dps2(예수금), DpsastAmt(예탁자산), TotEvalAmt(총평가금액) 등을 읽는다.

@@ -33,6 +33,9 @@ class FakeBrokerClient(BrokerClient):
     async def get_portfolio_snapshot(self) -> PortfolioSnapshot:
         snapshot = deepcopy(self.snapshot)
         snapshot.captured_at = snapshot.captured_at
+        
+        from core.LogManager import logManager
+        await logManager.log_portfolio_snapshot_async(snapshot)
         return snapshot
 
     async def get_quote(self, symbol: str, exchange: str = "") -> Quote:

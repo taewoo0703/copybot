@@ -13,7 +13,7 @@ from core.config_loader import load_copybot_config
 
 async def main():
     engine = CopyEngine()
-    config = load_copybot_config("config/copybot.example.yaml")
+    config = load_copybot_config("config/copybot.yaml")
     await engine.apply_config(config, sync_after_load=True)
     print(engine.get_status())
 
