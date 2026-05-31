@@ -33,25 +33,63 @@
 #   live: 브로커가 실주문을 지원하면 실제 주문을 넣음
 #
 accounts:
-  - account_id: domestic-master
+  # FAKE 계좌는 실제 주문을 넣지 않고 시스템 테스트용으로 사용합니다.
+  - account_id: FAKE_DOMESTIC
     broker: fake
     market_scope: domestic
-    credentials_ref: DOMESTIC_MASTER
+    credentials_ref: FAKE_DOMESTIC
     mode: dry_run
 
-  - account_id: domestic-slave
+  - account_id: FAKE_GLOBAL
     broker: fake
-    market_scope: domestic
-    credentials_ref: DOMESTIC_SLAVE
+    market_scope: global
+    credentials_ref: FAKE_GLOBAL
     mode: dry_run
+
+  # KIWOOM (국내 주식 전용)
+  - account_id: KIWOOM_MOCK
+    broker: kiwoom
+    market_scope: domestic
+    credentials_ref: KIWOOM_MOCK
+    mode: live
+
+  - account_id: KIWOOM_REAL
+    broker: kiwoom
+    market_scope: domestic
+    credentials_ref: KIWOOM_REAL
+    mode: live
+
+  # DB (국내/해외 주식 모두 지원)
+  - account_id: DB_GLOBAL_MOCK
+    broker: db
+    market_scope: global
+    credentials_ref: DB_GLOBAL_MOCK
+    mode: live
+
+  - account_id: DB_GLOBAL_REAL
+    broker: db
+    market_scope: global
+    credentials_ref: DB_GLOBAL_REAL
+    mode: live
+
 
 copy_groups:
-  - group_id: domestic-copy
-    master_account_id: domestic-master
+  - group_id: global-copy
+    master_account_id: DB_GLOBAL_REAL
     slave_account_ids:
-      - domestic-slave
+      - FAKE_GLOBAL
     enabled: true
-    mode: dry_run
-    poll_interval_seconds: 60
-    min_trade_value: 10000
-    cash_safety_buffer: 0.02
+    mode: live
+    poll_interval_seconds: 60 # seconds
+    min_trade_value: 10 # USD
+    cash_safety_buffer: 0.01  # = 1%
+
+  - group_id: domestic-copy
+    master_account_id: KIWOOM_REAL
+    slave_account_ids:
+      - FAKE_DOMESTIC
+    enabled: true
+    mode: live
+    poll_interval_seconds: 60 # seconds
+    min_trade_value: 10000 # KRW
+    cash_safety_buffer: 0.01  # = 1%
