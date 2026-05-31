@@ -149,7 +149,7 @@ class DBBrokerClient(BrokerClient):
                 self.tr_ids["domestic_balance"],
             )
             snapshot = self._parse_domestic_snapshot(payload)
-        else:
+        else:   # MarketScope.GLOBAL
             payload = await self._request_all_pages(
                 self.global_balance_path,
                 self._global_balance_body(),
@@ -510,10 +510,10 @@ class DBBrokerClient(BrokerClient):
 
         for item in raw_holdings:
             symbol = self._normalize_symbol(item.get("IsuNo") or item.get("ShtnIsuNo") or item.get("symbol"))
-            quantity = self._parse_int(item.get("BalQty0") or item.get("BalQty") or item.get("AbleQty"))
+            quantity = self._parse_int(item.get("BalQty0"))
             if not symbol or quantity <= 0:
                 continue
-            price = self._parse_number(item.get("NowPrc") or item.get("ExecPrc"), absolute=True)
+            price = self._parse_number(item.get("NowPrc"), absolute=True)
             market_value = self._parse_number(item.get("EvalAmt")) or quantity * price
             holdings.append(
                 Holding(
@@ -526,7 +526,7 @@ class DBBrokerClient(BrokerClient):
                 )
             )
 
-        cash = self._parse_number(summary.get("Dps2") or summary.get("DpsastAmt"))
+        cash = self._parse_number(summary.get("Dps2"))
         total_equity = (
             self._parse_number(summary.get("DpsastAmt"))
             or cash + self._parse_number(summary.get("TotEvalAmt"))

@@ -29,18 +29,24 @@ class LogManager(BaseLogManager):
         description = f"group_id: `{group.group_id}`\nmaster_account_id: `{group.master_account_id}`"
         quantity_table = TableImage(
             name="Quantity",
-            headers=["account", *symbols, "cash"],
+            headers=["symbol", "before", "after"],
             rows=[
-                ["before", *self._quantity_values(before, symbols), self._money(before.cash)],
-                ["after", *self._quantity_values(after, symbols), self._money(after.cash)],
+                *[
+                    [symbol, self._quantity(before, symbol), self._quantity(after, symbol)]
+                    for symbol in symbols
+                ],
+                ["cash", self._money(before.cash), self._money(after.cash)],
             ],
         )
         weight_table = TableImage(
             name="Weight",
-            headers=["account", *symbols, "cash"],
+            headers=["symbol", "before", "after"],
             rows=[
-                ["before", *self._weight_values(before, symbols), self._percent(self._cash_weight(before))],
-                ["after", *self._weight_values(after, symbols), self._percent(self._cash_weight(after))],
+                *[
+                    [symbol, self._weight(before, symbol), self._weight(after, symbol)]
+                    for symbol in symbols
+                ],
+                ["cash", self._percent(self._cash_weight(before)), self._percent(self._cash_weight(after))],
             ],
         )
         await self._send_table_images_async(
@@ -56,12 +62,19 @@ class LogManager(BaseLogManager):
         symbols = self._snapshot_symbols(snapshot)
         table = TableImage(
             name="Snapshot",
-            headers=["metric", *symbols, "cash"],
+            headers=["symbol", "current price", "quantity", "current value", "weight"],
             rows=[
-                ["current price", *self._price_values(snapshot, symbols), "-"],
-                ["quantity", *self._quantity_values(snapshot, symbols), "-"],
-                ["current value", *self._market_value_values(snapshot, symbols), self._money(snapshot.cash)],
-                ["weight", *self._weight_values(snapshot, symbols), self._percent(self._cash_weight(snapshot))],
+                *[
+                    [
+                        symbol,
+                        self._price(snapshot, symbol),
+                        self._quantity(snapshot, symbol),
+                        self._market_value(snapshot, symbol),
+                        self._weight(snapshot, symbol),
+                    ]
+                    for symbol in symbols
+                ],
+                ["cash", "-", "-", self._money(snapshot.cash), self._percent(self._cash_weight(snapshot))],
             ],
         )
         await self._send_table_images_async(
@@ -90,14 +103,29 @@ class LogManager(BaseLogManager):
         symbols = self._rebalance_symbols(master, slave, orders)
         table = TableImage(
             name="Plan",
-            headers=["metric", *symbols, "cash"],
+            headers=["symbol", "master", "slave", "current price", "slave current qty", "target_qty", "diff_qty"],
             rows=[
-                ["master weight", *self._weight_values(master, symbols), self._percent(self._cash_weight(master))],
-                ["slave weight", *self._weight_values(slave, symbols), self._percent(self._cash_weight(slave))],
-                ["current price", *self._rebalance_price_values(master, slave, symbols), "-"],
-                ["slave current qty", *self._quantity_values(slave, symbols), "-"],
-                ["target_qty", *self._target_quantity_values(slave, orders, symbols), "-"],
-                ["diff_qty", *self._diff_quantity_values(orders, symbols), "-"],
+                *[
+                    [
+                        symbol,
+                        self._weight(master, symbol),
+                        self._weight(slave, symbol),
+                        self._rebalance_price(master, slave, symbol),
+                        self._quantity(slave, symbol),
+                        self._target_quantity(slave, orders, symbol),
+                        self._diff_quantity(orders, symbol),
+                    ]
+                    for symbol in symbols
+                ],
+                [
+                    "cash",
+                    self._percent(self._cash_weight(master)),
+                    self._percent(self._cash_weight(slave)),
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                ],
             ],
         )
         await self._send_table_images_async(
@@ -177,12 +205,16 @@ class LogManager(BaseLogManager):
         symbols = self._snapshot_symbols(master, *slaves)
         table = TableImage(
             name="Weights",
-            headers=["account", *symbols, "cash"],
+            headers=["symbol", "master", *[slave.account_id for slave in slaves]],
             rows=[
-                ["master", *self._weight_values(master, symbols), self._percent(self._cash_weight(master))],
                 *[
-                    [slave.account_id, *self._weight_values(slave, symbols), self._percent(self._cash_weight(slave))]
-                    for slave in slaves
+                    [symbol, self._weight(master, symbol), *[self._weight(slave, symbol) for slave in slaves]]
+                    for symbol in symbols
+                ],
+                [
+                    "cash",
+                    self._percent(self._cash_weight(master)),
+                    *[self._percent(self._cash_weight(slave)) for slave in slaves],
                 ],
             ],
         )
@@ -232,7 +264,7 @@ class LogManager(BaseLogManager):
     def _render_table_png(self, table: "TableImage") -> bytes:
         columns = self._transpose_rows(table.rows)
         col_widths = self._column_widths(table.headers, table.rows)
-        width = max(620, min(1500, 40 + sum(col_widths) * 11))
+        width = 28 + sum(col_widths) * 8
         header_height = 34
         cell_height = 32
         vertical_margin = 8
@@ -278,7 +310,9 @@ class LogManager(BaseLogManager):
         widths = []
         for index, header in enumerate(headers):
             max_chars = max(len(str(header)), *(len(str(row[index])) for row in rows))
-            widths.append(max(7, min(18, max_chars + 2)))
+            padding = 5 if index == 0 else 4
+            minimum = 14 if index == 0 else 7
+            widths.append(max(minimum, max_chars + padding))
         return widths
 
     def _image_filename(self, prefix: str, table_name: str) -> str:
@@ -302,64 +336,47 @@ class LogManager(BaseLogManager):
     ) -> list[str]:
         return sorted(set(self._snapshot_symbols(master, slave)) | {order.instrument_key for order in orders})
 
-    def _quantity_values(self, snapshot: PortfolioSnapshot, symbols: list[str]) -> list[str]:
-        holdings = snapshot.holding_map()
-        return [str(holdings[symbol].quantity) if symbol in holdings else "0" for symbol in symbols]
+    def _quantity(self, snapshot: PortfolioSnapshot, symbol: str) -> str:
+        holding = snapshot.holding_map().get(symbol)
+        return str(holding.quantity) if holding else "0"
 
-    def _price_values(self, snapshot: PortfolioSnapshot, symbols: list[str]) -> list[str]:
-        holdings = snapshot.holding_map()
-        return [self._money(holdings[symbol].current_price) if symbol in holdings else "-" for symbol in symbols]
+    def _price(self, snapshot: PortfolioSnapshot, symbol: str) -> str:
+        holding = snapshot.holding_map().get(symbol)
+        return self._money(holding.current_price) if holding else "-"
 
-    def _market_value_values(self, snapshot: PortfolioSnapshot, symbols: list[str]) -> list[str]:
-        holdings = snapshot.holding_map()
-        return [self._money(holdings[symbol].market_value) if symbol in holdings else "0" for symbol in symbols]
+    def _market_value(self, snapshot: PortfolioSnapshot, symbol: str) -> str:
+        holding = snapshot.holding_map().get(symbol)
+        return self._money(holding.market_value) if holding else "0"
 
-    def _weight_values(self, snapshot: PortfolioSnapshot, symbols: list[str]) -> list[str]:
-        weights = snapshot.weights()
-        return [self._percent(weights.get(symbol, 0.0)) for symbol in symbols]
+    def _weight(self, snapshot: PortfolioSnapshot, symbol: str) -> str:
+        return self._percent(snapshot.weights().get(symbol, 0.0))
 
     def _cash_weight(self, snapshot: PortfolioSnapshot) -> float:
         if snapshot.total_equity <= 0:
             return 0.0
         return snapshot.cash / snapshot.total_equity
 
-    def _rebalance_price_values(
-        self,
-        master: PortfolioSnapshot,
-        slave: PortfolioSnapshot,
-        symbols: list[str],
-    ) -> list[str]:
+    def _rebalance_price(self, master: PortfolioSnapshot, slave: PortfolioSnapshot, symbol: str) -> str:
         master_holdings = master.holding_map()
         slave_holdings = slave.holding_map()
-        values = []
-        for symbol in symbols:
-            holding = slave_holdings.get(symbol) or master_holdings.get(symbol)
-            values.append(self._money(holding.current_price) if holding else "-")
-        return values
+        holding = slave_holdings.get(symbol) or master_holdings.get(symbol)
+        return self._money(holding.current_price) if holding else "-"
 
-    def _diff_quantity_values(self, orders: list[TargetOrder], symbols: list[str]) -> list[str]:
+    def _diff_quantity(self, orders: list[TargetOrder], symbol: str) -> str:
         diffs = {
             order.instrument_key: order.quantity if order.side == OrderSide.BUY else -order.quantity
             for order in orders
         }
-        return [str(diffs.get(symbol, 0)) for symbol in symbols]
+        return str(diffs.get(symbol, 0))
 
-    def _target_quantity_values(
-        self,
-        slave: PortfolioSnapshot,
-        orders: list[TargetOrder],
-        symbols: list[str],
-    ) -> list[str]:
+    def _target_quantity(self, slave: PortfolioSnapshot, orders: list[TargetOrder], symbol: str) -> str:
         holdings = slave.holding_map()
         diffs = {
             order.instrument_key: order.quantity if order.side == OrderSide.BUY else -order.quantity
             for order in orders
         }
-        values = []
-        for symbol in symbols:
-            current_qty = holdings[symbol].quantity if symbol in holdings else 0
-            values.append(str(current_qty + diffs.get(symbol, 0)))
-        return values
+        current_qty = holdings[symbol].quantity if symbol in holdings else 0
+        return str(current_qty + diffs.get(symbol, 0))
 
     def _add_text_fields(self, embed: Embed, name: str, value: str) -> None:
         blocks = self._text_blocks(value)

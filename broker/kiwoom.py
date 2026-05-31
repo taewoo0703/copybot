@@ -442,12 +442,7 @@ class KiwoomBrokerClient(BrokerClient):
                 )
             )
 
-        cash = self._parse_number(
-            cash_payload.get("ord_alow_amt")
-            or cash_payload.get("pymn_alow_amt")
-            or cash_payload.get("entr")
-            or cash_payload.get("d2_entra")
-        )
+        cash = self._parse_number(cash_payload.get("ord_alow_amt"))
         total_equity = (
             self._parse_number(balance.get("prsm_dpst_aset_amt"))
             or cash + self._parse_number(balance.get("tot_evlt_amt"))
