@@ -4,8 +4,7 @@ import re
 
 from dhooks import Embed
 from dhooks.file import File
-import plotly.graph_objects as go
-import plotly.io as pio
+from PIL import Image, ImageDraw, ImageFont
 
 from settings import settings
 from utility.BaseLogManager import BaseLogManager, log_level_under
@@ -262,58 +261,112 @@ class LogManager(BaseLogManager):
             self.logger.error(f"Discord table image send error: {error}")
 
     def _render_table_png(self, table: "TableImage") -> bytes:
-        columns = self._transpose_rows(table.rows)
-        col_widths = self._column_widths(table.headers, table.rows)
-        width = 28 + sum(col_widths) * 8
-        header_height = 34
-        cell_height = 32
-        vertical_margin = 8
-        height = header_height + len(table.rows) * cell_height + vertical_margin
+        scale = 2
+        header_font = self._load_table_font(size=15 * scale, bold=True)
+        cell_font = self._load_table_font(size=14 * scale, bold=False)
+        measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
 
-        fig = go.Figure(
-            data=[
-                go.Table(
-                    columnwidth=col_widths,
-                    header=dict(
-                        values=table.headers,
-                        align=["left", *["right"] * (len(table.headers) - 1)],
-                        fill_color="#E8EEF6",
-                        font=dict(color="#111827", size=15),
-                        height=header_height,
-                        line_color="#CBD5E1",
-                    ),
-                    cells=dict(
-                        values=columns,
-                        align=["left", *["right"] * (len(table.headers) - 1)],
-                        fill_color="#FFFFFF",
-                        font=dict(color="#111827", size=14),
-                        height=cell_height,
-                        line_color="#E2E8F0",
-                    ),
+        headers = [str(header) for header in table.headers]
+        rows = [[str(value) for value in row] for row in table.rows]
+        col_widths = self._pixel_column_widths(headers, rows, header_font, cell_font, measure, scale)
+        margin = 2 * scale
+        padding_x = 12 * scale
+        header_height = 34 * scale
+        cell_height = 32 * scale
+        width = margin * 2 + sum(col_widths)
+        height = margin * 2 + header_height + len(rows) * cell_height
+
+        image = Image.new("RGB", (width, height), "#FFFFFF")
+        draw = ImageDraw.Draw(image)
+
+        x = margin
+        y = margin
+        for index, col_width in enumerate(col_widths):
+            draw.rectangle((x, y, x + col_width, y + header_height), fill="#E8EEF6", outline="#CBD5E1")
+            self._draw_table_text(
+                draw,
+                headers[index],
+                (x, y, x + col_width, y + header_height),
+                header_font,
+                padding_x,
+                align="left" if index == 0 else "right",
+            )
+            x += col_width
+
+        y += header_height
+        for row in rows:
+            x = margin
+            for index, col_width in enumerate(col_widths):
+                value = row[index] if index < len(row) else ""
+                draw.rectangle((x, y, x + col_width, y + cell_height), fill="#FFFFFF", outline="#E2E8F0")
+                self._draw_table_text(
+                    draw,
+                    value,
+                    (x, y, x + col_width, y + cell_height),
+                    cell_font,
+                    padding_x,
+                    align="left" if index == 0 else "right",
                 )
-            ]
-        )
-        fig.update_layout(
-            width=width,
-            height=height,
-            margin=dict(l=2, r=2, t=2, b=2),
-            paper_bgcolor="#FFFFFF",
-        )
-        return pio.to_image(fig, format="png", width=width, height=height, scale=2)
+                x += col_width
+            y += cell_height
 
-    def _transpose_rows(self, rows: list[list[str]]) -> list[list[str]]:
-        if not rows:
-            return []
-        return [[row[index] for row in rows] for index in range(len(rows[0]))]
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
 
-    def _column_widths(self, headers: list[str], rows: list[list[str]]) -> list[int]:
+    def _pixel_column_widths(
+        self,
+        headers: list[str],
+        rows: list[list[str]],
+        header_font: ImageFont.ImageFont,
+        cell_font: ImageFont.ImageFont,
+        draw: ImageDraw.ImageDraw,
+        scale: int,
+    ) -> list[int]:
         widths = []
         for index, header in enumerate(headers):
-            max_chars = max(len(str(header)), *(len(str(row[index])) for row in rows))
-            padding = 5 if index == 0 else 4
-            minimum = 14 if index == 0 else 7
-            widths.append(max(minimum, max_chars + padding))
+            header_width = self._text_width(draw, header, header_font)
+            row_width = max(
+                (self._text_width(draw, row[index] if index < len(row) else "", cell_font) for row in rows),
+                default=0,
+            )
+            padding = 24 * scale
+            minimum = (112 if index == 0 else 76) * scale
+            widths.append(max(minimum, header_width, row_width) + padding)
         return widths
+
+    def _draw_table_text(
+        self,
+        draw: ImageDraw.ImageDraw,
+        value: str,
+        box: tuple[int, int, int, int],
+        font: ImageFont.ImageFont,
+        padding_x: int,
+        align: str,
+    ) -> None:
+        left, top, right, bottom = box
+        text_box = draw.textbbox((0, 0), value, font=font)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        x = left + padding_x if align == "left" else right - padding_x - text_width
+        y = top + ((bottom - top) - text_height) // 2 - text_box[1]
+        draw.text((x, y), value, fill="#111827", font=font)
+
+    def _text_width(self, draw: ImageDraw.ImageDraw, value: str, font: ImageFont.ImageFont) -> int:
+        text_box = draw.textbbox((0, 0), value, font=font)
+        return text_box[2] - text_box[0]
+
+    def _load_table_font(self, size: int, bold: bool) -> ImageFont.ImageFont:
+        font_paths = [
+            r"C:\Windows\Fonts\malgunbd.ttf" if bold else r"C:\Windows\Fonts\malgun.ttf",
+            r"C:\Windows\Fonts\arialbd.ttf" if bold else r"C:\Windows\Fonts\arial.ttf",
+        ]
+        for font_path in font_paths:
+            try:
+                return ImageFont.truetype(font_path, size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
 
     def _image_filename(self, prefix: str, table_name: str) -> str:
         safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", prefix).strip("_")
