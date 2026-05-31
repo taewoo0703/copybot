@@ -166,6 +166,9 @@ class CopyEngine:
             results.extend(buy_results)
             errors.extend(buy_errors)
 
+        if results:
+            await logManager.log_order_results_async(group, slave_id, results)
+
         if errors:
             await logManager.log_slave_sync_errors_async(group, slave_id, errors)
 
@@ -196,30 +199,29 @@ class CopyEngine:
         for order in live_orders:
             try:
                 quote: Quote = await slave_client.get_quote(order.symbol, order.exchange)
-                ask_price = quote.ask_price_1
-                if ask_price <= 0:
-                    errors.append(f"{order.instrument_key} has no ask_price_1; buy order skipped")
-                    break
+                order_price = quote.ask_price_1 if quote.ask_price_1 > 0 else quote.last_price
+                if quote.ask_price_1 <= 0:
+                    errors.append(f"{order.instrument_key} has no ask_price_1; order price set to last_price")
 
-                quantity = min(order.quantity, floor(available_cash / ask_price))
+                quantity = min(order.quantity, floor(available_cash / order_price))
                 if quantity <= 0:
                     errors.append(f"insufficient cash for {order.instrument_key}; remaining buy orders stopped")
-                    break
+                    continue
 
-                estimated_value = quantity * ask_price
+                estimated_value = quantity * order_price
                 if estimated_value < group.min_trade_value:
                     errors.append(
                         f"{order.instrument_key} adjusted buy value is below min_trade_value; remaining buy orders stopped"
                     )
-                    break
+                    continue
 
                 executable_order = replace(
                     order,
                     quantity=quantity,
-                    estimated_price=ask_price,
+                    estimated_price=order_price,
                     estimated_value=estimated_value,
                     order_type=OrderType.LIMIT,
-                    limit_price=ask_price,
+                    limit_price=order_price,
                     reason="master_weight_sync_buy_at_ask1",
                 )
                 slave_client.assert_order_supported(executable_order)

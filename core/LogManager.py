@@ -10,7 +10,7 @@ import plotly.io as pio
 from settings import settings
 from utility.BaseLogManager import BaseLogManager, log_level_under
 
-from .schemas import CopyGroupConfig, PortfolioSnapshot, TargetOrder
+from .schemas import CopyGroupConfig, OrderResult, PortfolioSnapshot, TargetOrder
 from .types import OrderSide
 
 
@@ -133,6 +133,38 @@ class LogManager(BaseLogManager):
             color=0xF1C40F,
         )
         self._add_text_fields(embed, "Errors", "\n".join(f"- {error}" for error in errors))
+        await self.log_message_async(embed=embed)
+
+    @log_level_under("INFO")
+    async def log_order_results_async(
+        self,
+        group: CopyGroupConfig,
+        slave_account_id: str,
+        results: list[OrderResult],
+    ) -> None:
+        if not results:
+            return
+
+        embed = Embed(
+            title=f"Order results: {slave_account_id}",
+            description=(
+                f"group_id: `{group.group_id}`\n"
+                f"master_account_id: `{group.master_account_id}`\n"
+                f"slave_account_id: `{slave_account_id}`\n"
+                f"results: `{len(results)}`"
+            ),
+            color=0x1ABC9C,
+        )
+        for index, result in enumerate(results, start=1):
+            embed.add_field(
+                name=f"{index}. {result.order.instrument_key} {result.order.side.value} x{result.order.quantity}",
+                value=self._lines(
+                    f"accepted: `{result.accepted}`",
+                    f"order_id: `{result.order_id or '-'}`",
+                    f"message: {self._inline_code(self._short_text(result.message or '-', 850))}",
+                ),
+                inline=False,
+            )
         await self.log_message_async(embed=embed)
 
     @log_level_under("INFO")
@@ -353,6 +385,19 @@ class LogManager(BaseLogManager):
         if current:
             chunks.append("\n".join(current))
         return chunks
+
+    def _short_text(self, value: str, limit: int = 120) -> str:
+        normalized = " ".join(str(value).split())
+        if len(normalized) <= limit:
+            return normalized
+        return f"{normalized[: limit - 3]}..."
+
+    def _lines(self, *lines: str) -> str:
+        return "\n".join(lines)
+
+    def _inline_code(self, value: str) -> str:
+        escaped = str(value).replace("`", "'")
+        return f"`{escaped}`"
 
     def _money(self, value: float) -> str:
         if float(value).is_integer():

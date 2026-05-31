@@ -140,6 +140,7 @@ class DBBrokerClient(BrokerClient):
     async def get_portfolio_snapshot(self) -> PortfolioSnapshot:
         # copybot은 "포트폴리오 스냅샷"이라는 공통 모델을 사용한다.
         # DB 응답의 현금/평가금액/보유종목 필드를 읽어 PortfolioSnapshot으로 정규화한다.
+        # 해외자산은 잔고와 현금성 금액을 별도로 조회한다.
         snapshot: PortfolioSnapshot = None
         if self.account.market_scope == MarketScope.DOMESTIC:
             payload = await self._request_all_pages(
@@ -154,7 +155,12 @@ class DBBrokerClient(BrokerClient):
                 self._global_balance_body(),
                 self.tr_ids["global_balance"],
             )
-            snapshot = self._parse_global_snapshot(payload)
+            cash_payload = await self._request_all_pages(
+                self.global_balance_path,
+                self._global_balance_body(is_cash=True),
+                self.tr_ids["global_balance"],
+            )
+            snapshot = self._parse_global_snapshot(payload, cash_payload)
 
         from core.LogManager import logManager
         await logManager.log_portfolio_snapshot_async(snapshot)
@@ -164,7 +170,7 @@ class DBBrokerClient(BrokerClient):
         # 현재가 조회에서 ask/bid 1호가가 같이 내려오지 않는 경우가 있어,
         # 먼저 PRICE/FSTKPRICE를 호출하고 1호가가 비어 있으면 HOGA/FSTKHOGA를 한 번 더 호출한다.
         if self.account.market_scope == MarketScope.DOMESTIC:
-            body = self._quote_body(symbol, domestic=True)
+            body = self._quote_body(symbol, domestic=True, exchange=exchange)
             quote_payload = await self._request_json(
                 self.domestic_quote_path,
                 body,
@@ -181,7 +187,7 @@ class DBBrokerClient(BrokerClient):
             )
             return self._parse_quote(symbol, exchange or self._domestic_exchange(), hoga_payload, fallback=quote)
 
-        body = self._quote_body(symbol, domestic=False)
+        body = self._quote_body(symbol, domestic=False, exchange=exchange)
         quote_payload = await self._request_json(
             self.global_quote_path,
             body,
@@ -364,7 +370,29 @@ class DBBrokerClient(BrokerClient):
     def _domestic_exchange(self) -> str:
         return "KRX"
 
-    def _global_market_div_code(self) -> str:
+    def _global_market_div_code(self, exchange: Any = "") -> str:
+        # FY:뉴욕, FN:나스닥, FA:아멕스
+        value = str(exchange or "").strip()
+        upper_value = value.upper()
+        if upper_value in {"FY", "FN", "FA"}:
+            return upper_value
+
+        market_name_map = {
+            "뉴욕": "FY",
+            "NEW YORK": "FY",
+            "NYSE": "FY",
+            "나스닥": "FN",
+            "NASDAQ": "FN",
+            "NASD": "FN",
+            "아멕스": "FA",
+            "AMEX": "FA",
+            "AMERICAN": "FA",
+        }
+        if value in market_name_map:
+            return market_name_map[value]
+        if upper_value in market_name_map:
+            return market_name_map[upper_value]
+
         return "FN"
 
     def _domestic_balance_body(self) -> dict[str, Any]:
@@ -377,12 +405,12 @@ class DBBrokerClient(BrokerClient):
         #   NowPrc(현재가), ExecPrc(체결/평균가), EvalAmt(평가금액)를 사용한다.
         return {"In": {"QryTpCode": "0"}}
 
-    def _global_balance_body(self) -> dict[str, Any]:
+    def _global_balance_body(self, is_cash=False) -> dict[str, Any]:
         # CAZCQ00400 Input reference:
-        # - WonFcurrTpCode: 원화/외화 표시 구분. 현재 구현은 해외잔고 기본 조회값 "2"를 사용한다.
-        # - TrxTpCode: 거래/조회 구분. 현재 구현은 잔고 조회용 "2"를 사용한다.
-        # - CmsnTpCode: 수수료 반영 구분. 현재 구현은 API 기본 조회값 "2"를 사용한다.
-        # - DpntBalTpCode: 예수금/잔고 구분. 현재 구현은 보유잔고 중심 조회값 "1"을 사용한다.
+        # - WonFcurrTpCode: 원화/외화 표시 구분. 현재 구현은 해외잔고 기본 조회값 "2"를 사용한다. (1:원화, 2:외화)
+        # - TrxTpCode: 거래/조회 구분. 현재 구현은 잔고 조회용 "2"를 사용한다.  (1:외화잔고, 2:주식잔고상세, 3:주식잔고(국가별), 9:당일실현손익)
+        # - CmsnTpCode: 수수료 반영 구분. 현재 구현은 API 기본 조회값 "2"를 사용한다. (0:전부 미포함, 1:매수제비용만 포함, 2:매수제비용+매도제비용)
+        # - DpntBalTpCode: 예수금/잔고 구분. 현재 구현은 보유잔고 중심 조회값 "1"을 사용한다. (0: 전체, 1: 일반, 2: 소수점)
         #
         # Output reference:
         # - Out: 계좌 요약. Dps(예수금), OrdAbleAmt(주문가능금액), AssetAmtTotamt(총자산) 등을 읽는다.
@@ -392,13 +420,13 @@ class DBBrokerClient(BrokerClient):
         return {
             "In": {
                 "WonFcurrTpCode": "2",
-                "TrxTpCode": "2",
+                "TrxTpCode": "1" if is_cash else "2",
                 "CmsnTpCode": "2",
                 "DpntBalTpCode": "1",
             }
         }
 
-    def _quote_body(self, symbol: str, domestic: bool) -> dict[str, Any]:
+    def _quote_body(self, symbol: str, domestic: bool, exchange: str = "") -> dict[str, Any]:
         # PRICE/FSTKPRICE/HOGA/FSTKHOGA Input reference:
         # - InputIscd1: 종목코드. 국내는 6자리 코드, 해외는 내부 정규화된 심볼을 넣는다.
         # - InputCondMrktDivCode: 시장 구분. 국내 현재가 샘플 기준 "J"는 주식,
@@ -410,7 +438,7 @@ class DBBrokerClient(BrokerClient):
         return {
             "In": {
                 "InputIscd1": self._domestic_symbol(symbol) if domestic else self._global_symbol(symbol),
-                "InputCondMrktDivCode": "J" if domestic else self._global_market_div_code(),
+                "InputCondMrktDivCode": "J" if domestic else self._global_market_div_code(exchange),
             }
         }
 
@@ -426,7 +454,7 @@ class DBBrokerClient(BrokerClient):
             # - MgntrnCode: 신용/대출 구분. "000"=현금 주문.
             # - LoanDt: 대출일. 현금 주문에서는 "00000000".
             # - OrdCndiTpCode: 주문조건. "0"=일반 조건.
-            # - TrchNo: 트랜치 번호. 분할/특수 주문을 쓰지 않아 0.
+            # - TrchNo: 트랜치 번호. 주문시 거래소 구분용도로 사용. (1 : KRX) ※ 1로 고정하셔서 사용 부탁드립니다. (SOR 주문 구분은 추후 제공 예정)
             #
             # Output reference:
             # - Out.OrdNo: 주문번호. copybot OrderResult.order_id로 보관한다.
@@ -441,7 +469,7 @@ class DBBrokerClient(BrokerClient):
                     "MgntrnCode": "000",
                     "LoanDt": "00000000",
                     "OrdCndiTpCode": "0",
-                    "TrchNo": 0,
+                    "TrchNo": 1,
                 }
             }
 
@@ -452,8 +480,8 @@ class DBBrokerClient(BrokerClient):
         # - AstkOrdprcPtnCode: 호가유형. 현재 구현은 "1"=지정가, "2"=시장가로 매핑한다.
         # - AstkOrdCndiTpCode: 주문조건. 현재 구현은 일반 주문값 "1"을 사용한다.
         # - AstkOrdQty/AstkOrdPrc: 주문수량/주문가격. 시장가는 가격 0.
-        # - OrdTrdTpCode: 주문거래유형. 현재 구현은 일반 주문값 "0"을 사용한다.
-        # - OrgOrdNo: 원주문번호. 정정/취소가 아니라 신규 주문이므로 0.
+        # - OrdTrdTpCode: 주문거래유형. 현재 구현은 일반 주문값 "0"을 사용한다. (0: 주문, 1: 정정주문, 2: 취소주문)
+        # - OrgOrdNo: 원주문번호. 정정/취소가 아니라 신규 주문이므로 0. (정정주문, 취소주문시 원 주문번호 입력)
         #
         # 해외 주문 코드값은 국가/시장별로 달라질 수 있으므로 DB 해외주식 주문 명세와 대조해야 한다.
         return {
@@ -512,17 +540,14 @@ class DBBrokerClient(BrokerClient):
             currency="KRW",
         )
 
-    def _parse_global_snapshot(self, payload: dict[str, Any]) -> PortfolioSnapshot:
-        # 해외 잔고는 보유종목 배열명이 Out2로 내려오는 케이스와 Out1로 내려오는 케이스를 모두 허용한다.
-        summary = payload.get("Out") or {}
-        raw_holdings = payload.get("Out2") or payload.get("Out1") or []
+    def _parse_global_snapshot(self, payload: dict[str, Any], cash_payload: dict[str, Any]) -> PortfolioSnapshot:
+        cash_holdings = cash_payload.get("Out1") or []
+        raw_holdings = payload.get("Out2") or []
         holdings: list[Holding] = []
 
         for item in raw_holdings:
             symbol = self._global_symbol(item.get("SymCode") or item.get("AstkIsuNo") or "")
-            quantity = self._parse_int(
-                item.get("AstkSettBaseQty") or item.get("AstkExecBaseQty") or item.get("AstkOrdAbleQty")
-            )
+            quantity = self._parse_int(item.get("AstkExecBaseQty"))     # 해외주식체결기준수량
             if not symbol or quantity <= 0:
                 continue
             price = self._parse_number(item.get("AstkNowPrc"), absolute=True)
@@ -530,7 +555,9 @@ class DBBrokerClient(BrokerClient):
             holdings.append(
                 Holding(
                     symbol=symbol,
-                    exchange=str(item.get("AstkMktCode") or item.get("ShtnCntrySymCode") or ""),
+                    exchange=self._global_market_div_code(
+                        item.get("AstkSeNm") or item.get("AstkMktCode") or item.get("ShtnCntrySymCode")
+                    ),
                     quantity=quantity,
                     current_price=price,
                     market_value=market_value,
@@ -538,10 +565,14 @@ class DBBrokerClient(BrokerClient):
                 )
             )
 
-        cash = self._parse_number(summary.get("Dps") or summary.get("OrdAbleAmt"))
-        total_equity = self._parse_number(summary.get("AssetAmtTotamt")) or cash + sum(
-            holding.market_value for holding in holdings
-        )
+
+        cash = 0.0
+        for item in cash_holdings:
+            currency = str(item.get("CrcyCode"))
+            if currency == "USD":
+                cash = self._parse_number(item.get("AstkOrdAbleAmt"))
+                break
+        total_equity = cash + sum(holding.market_value for holding in holdings)
         return PortfolioSnapshot(
             account_id=self.account.account_id,
             total_equity=total_equity,
@@ -604,7 +635,7 @@ class DBBrokerClient(BrokerClient):
         return self._normalize_symbol(symbol)
 
     def _global_symbol(self, symbol: Any) -> str:
-        return self._normalize_symbol(symbol).removeprefix("FN")
+        return self._normalize_symbol(symbol).removeprefix("US")
 
     def _parse_number(self, value: Any, absolute: bool = False) -> float:
         if value is None:

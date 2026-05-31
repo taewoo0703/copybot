@@ -57,14 +57,14 @@ def account(account_id, broker, market_scope):
     )
 
 
-def order(broker, market_scope, side=OrderSide.BUY, order_type=OrderType.LIMIT):
+def order(broker, market_scope, side=OrderSide.BUY, order_type=OrderType.LIMIT, exchange=None):
     return TargetOrder(
         group_id="g",
         account_id="a",
         broker=broker,
         market_scope=market_scope,
         symbol="005930" if market_scope == MarketScope.DOMESTIC else "TSLA",
-        exchange="KRX" if market_scope == MarketScope.DOMESTIC else "US",
+        exchange=exchange or ("KRX" if market_scope == MarketScope.DOMESTIC else "US"),
         side=side,
         quantity=3,
         estimated_price=100.0,
@@ -159,6 +159,7 @@ class DBRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
                                 "AstkIsuNo": "TSLA.US",
                                 "SymCode": "TSLA",
                                 "AstkMktCode": "US",
+                                "AstkSeNm": "뉴욕",
                                 "CrcyCode": "USD",
                                 "AstkSettBaseQty": "2.000000",
                                 "AstkNowPrc": "200.5000",
@@ -180,11 +181,29 @@ class DBRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(snapshot.currency, "USD")
         self.assertEqual(snapshot.holdings[0].symbol, "TSLA")
+        self.assertEqual(snapshot.holdings[0].exchange, "FY")
         self.assertEqual(snapshot.holdings[0].market_value, 401.0)
         self.assertEqual(quote.ask_price_1, 201.0)
         self.assertEqual(result.order_id, "77")
         self.assertEqual(fake.requests[1]["json"]["In"]["InputCondMrktDivCode"], "FN")
+        self.assertEqual(fake.requests[2]["json"]["In"]["AstkMktCode"], "FN")
         self.assertEqual(fake.requests[2]["json"]["In"]["AstkOrdprcPtnCode"], "2")
+
+    async def test_db_global_order_uses_exchange_from_balance(self):
+        client = DBBrokerClient(
+            account("db", BrokerName.DB, MarketScope.GLOBAL),
+            BrokerCredentials(ref="DB"),
+        )
+        ready(client, datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc))
+        fake = FakeHttpClient([FakeResponse({"Out": {"OrdNo": 88}, "rsp_cd": "00000"})])
+        client._http_client = lambda: fake
+
+        result = await client.place_order(
+            order(BrokerName.DB, MarketScope.GLOBAL, order_type=OrderType.MARKET, exchange="FY")
+        )
+
+        self.assertEqual(result.order_id, "88")
+        self.assertEqual(fake.requests[0]["json"]["In"]["AstkMktCode"], "FY")
 
     async def test_db_market_open_refresh_and_error_handling(self):
         client = DBBrokerClient(
