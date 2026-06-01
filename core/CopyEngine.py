@@ -286,18 +286,4 @@ class CopyEngine:
         }
 
     def _master_fingerprint(self, snapshot: PortfolioSnapshot) -> tuple[Any, ...]:
-        return (
-            ("cash", round(snapshot.cash, 4)),
-            ("total_equity", round(snapshot.total_equity, 4)),
-            *tuple(
-                sorted(
-                    (
-                        holding.key,
-                        holding.quantity,
-                        round(holding.current_price, 4),
-                        round(holding.market_value, 4),
-                    )
-                    for holding in snapshot.holdings
-                )
-            ),
-        )
+        return snapshot.fingerprint()

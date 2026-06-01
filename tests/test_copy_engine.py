@@ -111,6 +111,45 @@ class CopyEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.group_state["g-a"]["last_orders"][0]["symbol"], "A")
         self.assertEqual(engine.group_state["g-b"]["last_orders"], [])
 
+    async def test_master_price_only_change_is_unchanged(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master").to_dict(),
+                    fake_account("slave").to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g1",
+                        "master_account_id": "master",
+                        "slave_account_ids": ["slave"],
+                    }
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+        )
+        engine.registry.get_client("slave").snapshot = fake_snapshot(
+            "slave",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+        )
+
+        await engine.sync_group("g1", force=True)
+
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 101}],
+        )
+
+        state = await engine.sync_group("g1", force=False)
+
+        self.assertFalse(state["master_changed"])
+        self.assertEqual(state["last_message"], "master unchanged")
+
     async def test_live_mode_places_orders_when_supported(self):
         config = CopyBotConfig.from_dict(
             {
