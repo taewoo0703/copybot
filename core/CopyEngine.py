@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from math import floor
 import time
@@ -14,6 +15,9 @@ from .PortfolioRebalancer import PortfolioRebalancer
 from .config_loader import load_copybot_config
 from .schemas import CopyBotConfig, CopyGroupConfig, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from .types import OrderSide, OrderType, SyncRunMode
+
+
+POST_ORDER_SNAPSHOT_DELAY_SECONDS = 10
 
 
 class CopyEngine:
@@ -110,11 +114,13 @@ class CopyEngine:
             state["last_sync_at"] = time.time()
             state["last_message"] = f"synced {len(all_orders)} planned orders"
             self.next_poll_at[group_id] = time.time() + group.poll_interval_seconds
-            refreshed_slave_snapshots = [
-                await self.registry.get_client(slave_id).get_portfolio_snapshot()
-                for slave_id in group.slave_account_ids
-            ]
-            await logManager.log_group_weight_comparison_async(group, master_snapshot, refreshed_slave_snapshots)
+            if all_results:
+                await asyncio.sleep(POST_ORDER_SNAPSHOT_DELAY_SECONDS)
+                refreshed_slave_snapshots = [
+                    await self.registry.get_client(slave_id).get_portfolio_snapshot()
+                    for slave_id in group.slave_account_ids
+                ]
+                await logManager.log_group_weight_comparison_async(group, master_snapshot, refreshed_slave_snapshots)
             return state
         except Exception as error:
             state["last_error"] = str(error)
