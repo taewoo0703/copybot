@@ -1,0 +1,16 @@
+Release Notes
+
+0.0.1 Initialize the project
+0.1.0 Release initial code based on REST API basic structure
+0.2.0 Handle live websocket stream and implement async callback system
+0.2.1 Return 'RealData' a wrapper object for real-time data instead of raw json string
+0.2.2 Add warnings to check connection status and safe guards for closing
+0.2.3 Fix minor bug when saving csv files
+0.2.4 Update callback arg specs 'RealData' and add sector list function
+0.2.5 Update dataframe dtypes for candle data
+0.2.6 Set dynamic event loop in RateLimiter
+0.2.7 Fix remove_register method
+0.2.8 Support custom http headers with User Agent
+0.2.9 Support mock server with 1 request limit per sec
+0.3.0 Handle df slice object to support empty string
+0.4.0 Fix collision by changing Client.connect() to Client.\_connect()
