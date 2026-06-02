@@ -119,6 +119,16 @@ async def trigger_sync(request: SyncTriggerRequest):
     return await core.trigger_sync(request.group_id)
 
 
+@app.post("/portfolio/snapshot")
+async def snapshot_portfolios(request: BaseRequest):
+    return await core.snapshot_portfolios()
+
+
+@app.post("/orders/open")
+async def view_open_orders(request: BaseRequest):
+    return await core.view_open_orders()
+
+
 ##########################################
 # utility
 ##########################################

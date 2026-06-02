@@ -63,6 +63,37 @@ class CopyEngine:
             results[group.group_id] = await self.sync_group(group.group_id, force=force)
         return results
 
+    async def snapshot_all_groups(self) -> dict[str, Any]:
+        results = {}
+        for group in self.config.copy_groups:
+            master_snapshot = await self.registry.get_client(group.master_account_id).get_portfolio_snapshot()
+            slave_snapshots = [
+                await self.registry.get_client(slave_id).get_portfolio_snapshot()
+                for slave_id in group.slave_account_ids
+            ]
+            await logManager.log_group_weight_comparison_async(group, master_snapshot, slave_snapshots)
+            results[group.group_id] = {
+                "master": master_snapshot.to_dict(),
+                "slaves": [snapshot.to_dict() for snapshot in slave_snapshots],
+            }
+        return results
+
+    async def get_all_open_orders(self) -> dict[str, Any]:
+        results = {}
+        for account_id in sorted(self.registry.clients):
+            try:
+                orders = await self.registry.get_client(account_id).get_open_orders()
+                results[account_id] = {
+                    "orders": [order.to_dict() for order in orders],
+                    "errors": [],
+                }
+            except (BrokerError, BrokerFeatureUnavailable) as error:
+                results[account_id] = {"orders": [], "errors": [str(error)]}
+            except Exception as error:
+                await logManager.log_error_message_async(error, "Open Orders")
+                results[account_id] = {"orders": [], "errors": [str(error)]}
+        return results
+
     async def sync_group(self, group_id: str, force: bool = True) -> dict[str, Any]:
         group = self._get_group(group_id)
         state = self.group_state.setdefault(group_id, self._new_group_state(group))

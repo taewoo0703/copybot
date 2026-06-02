@@ -62,6 +62,14 @@ document.body.addEventListener("click", (event) => {
             body = { password };
             url = "/view_status";
             break;
+        case "portfolio-snapshot":
+            body = { password };
+            url = "/portfolio/snapshot";
+            break;
+        case "view-open-orders":
+            body = { password };
+            url = "/orders/open";
+            break;
         case "on-whitelist":
             url = "/use_whitelist/1";
             break;

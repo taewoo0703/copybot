@@ -111,6 +111,12 @@ class Core:
             return await self.copy_engine.sync_group(group_id, force=True)
         return await self.copy_engine.sync_all(force=True)
 
+    async def snapshot_portfolios(self) -> dict:
+        return await self.copy_engine.snapshot_all_groups()
+
+    async def view_open_orders(self) -> dict:
+        return await self.copy_engine.get_all_open_orders()
+
     def set_pause(self, pause: bool) -> None:
         """
         시스템 일시정지 설정 메서드. API에서 호출됨.
