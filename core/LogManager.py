@@ -26,26 +26,27 @@ class LogManager(BaseLogManager):
     ) -> None:
         symbols = self._snapshot_symbols(before, after)
         description = f"group_id: `{group.group_id}`\nmaster_account_id: `{group.master_account_id}`"
-        quantity_table = TableImage(
-            name="Quantity",
-            headers=["symbol", "before", "after"],
+        table = TableImage(
+            name="Change",
+            headers=["symbol", "before qty", "after qty", "before weight", "after weight"],
             rows=[
                 *[
-                    [symbol, self._quantity(before, symbol), self._quantity(after, symbol)]
+                    [
+                        symbol,
+                        self._quantity(before, symbol),
+                        self._quantity(after, symbol),
+                        self._weight(before, symbol),
+                        self._weight(after, symbol),
+                    ]
                     for symbol in symbols
                 ],
-                ["cash", self._money(before.cash), self._money(after.cash)],
-            ],
-        )
-        weight_table = TableImage(
-            name="Weight",
-            headers=["symbol", "before", "after"],
-            rows=[
-                *[
-                    [symbol, self._weight(before, symbol), self._weight(after, symbol)]
-                    for symbol in symbols
+                [
+                    "cash",
+                    self._money(before.cash),
+                    self._money(after.cash),
+                    self._percent(self._cash_weight(before)),
+                    self._percent(self._cash_weight(after)),
                 ],
-                ["cash", self._percent(self._cash_weight(before)), self._percent(self._cash_weight(after))],
             ],
         )
         await self._send_table_images_async(
@@ -53,7 +54,7 @@ class LogManager(BaseLogManager):
             description=description,
             color=0x2ECC71,
             filename_prefix=f"master_changed_{after.account_id}",
-            tables=[quantity_table, weight_table],
+            tables=[table],
         )
 
     @log_level_under("TRACE")
