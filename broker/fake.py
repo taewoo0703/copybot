@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from core.schemas import Holding, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from core.schemas import Holding, OpenOrder, OrderCancelResult, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import OrderSide
 
 from .base import BrokerCapabilities, BrokerClient, BrokerCredentials
@@ -12,6 +12,9 @@ class FakeBrokerClient(BrokerClient):
     def __init__(self, account, credentials: BrokerCredentials):
         super().__init__(account, credentials)
         self.orders: list[TargetOrder] = []
+        self.open_orders: list[OpenOrder] = []
+        self.cancelled_orders: list[OpenOrder] = []
+        self.events: list[str] = []
         self.snapshot = PortfolioSnapshot(
             account_id=account.account_id,
             total_equity=0.0,
@@ -31,6 +34,7 @@ class FakeBrokerClient(BrokerClient):
         return True
 
     async def get_portfolio_snapshot(self) -> PortfolioSnapshot:
+        self.events.append("get_portfolio_snapshot")
         snapshot = deepcopy(self.snapshot)
         snapshot.captured_at = snapshot.captured_at
         
@@ -58,6 +62,16 @@ class FakeBrokerClient(BrokerClient):
         self.orders.append(order)
         self._apply_order(order)
         return OrderResult(order=order, accepted=True, order_id=f"fake-{len(self.orders)}")
+
+    async def get_open_orders(self) -> list[OpenOrder]:
+        self.events.append("get_open_orders")
+        return deepcopy(self.open_orders)
+
+    async def cancel_order(self, order: OpenOrder) -> OrderCancelResult:
+        self.events.append("cancel_order")
+        self.open_orders = [item for item in self.open_orders if item.order_id != order.order_id]
+        self.cancelled_orders.append(order)
+        return OrderCancelResult(order=order, accepted=True, message="fake order cancelled")
 
     def get_capabilities(self) -> BrokerCapabilities:
         return BrokerCapabilities(

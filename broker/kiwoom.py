@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from core.schemas import Holding, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from core.schemas import Holding, OpenOrder, OrderCancelResult, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import MarketScope, OrderSide, OrderType
 
 from .base import BrokerCapabilities, BrokerClient, BrokerCredentials, BrokerError, BrokerFeatureUnavailable
@@ -44,8 +44,10 @@ class KiwoomBrokerClient(BrokerClient):
         "cash": "kt00001",
         "hoga": "ka10004",
         "stock_info": "ka10001",
+        "open_orders": "kt00009",
         "buy_order": "kt10000",
         "sell_order": "kt10001",
+        "cancel_order": "kt10003",
     }
 
     # 키움은 실서버와 모의서버의 요청 제한 체감이 다르므로 간격을 분리한다.
@@ -174,6 +176,28 @@ class KiwoomBrokerClient(BrokerClient):
         )
         order_id = self._extract_order_id(payload)
         return OrderResult(order=order, accepted=True, order_id=order_id, message=str(payload))
+
+    async def get_open_orders(self) -> list[OpenOrder]:
+        if self.account.market_scope != MarketScope.DOMESTIC:
+            raise BrokerFeatureUnavailable("kiwoom global stock trading is not supported")
+
+        payload = await self._request_all_pages(
+            self.account_path,
+            self._open_orders_request_body(),
+            self.tr_ids["open_orders"],
+        )
+        return self._parse_open_orders(payload)
+
+    async def cancel_order(self, order: OpenOrder) -> OrderCancelResult:
+        if self.account.market_scope != MarketScope.DOMESTIC:
+            raise BrokerFeatureUnavailable("kiwoom global stock trading is not supported")
+
+        payload = await self._request_json(
+            self.order_path,
+            self._cancel_order_request_body(order),
+            self.tr_ids["cancel_order"],
+        )
+        return OrderCancelResult(order=order, accepted=True, message=str(payload))
 
     def get_capabilities(self) -> BrokerCapabilities:
         return BrokerCapabilities(
@@ -414,6 +438,48 @@ class KiwoomBrokerClient(BrokerClient):
             "cond_uv": "",
         }
 
+    def _open_orders_request_body(self) -> dict[str, str]:
+        # kt00009 계좌 주문/체결 현황 Input reference:
+        # - ord_dt: 주문일자. 키움 조회 API는 YYYYMMDD를 요구하므로 현재 시장일을 사용한다.
+        # - stk_bond_tp: 주식/채권 구분. "1"은 주식.    (0:전체, 1:주식, 2:채권)
+        # - mrkt_tp: 시장 구분 필터. "0"은 전체 시장.   (0:전체, 1:코스피, 2:코스닥, 3:OTCBB, 4:ECN)
+        # - sell_tp: 매도/매수 구분 필터. "0"은 매수/매도 전체.   (0:전체, 1:매도, 2:매수)
+        # - qry_tp: 조회 구분. "0"로 전체 주문/체결 행을 조회한다.  (0:전체, 1:체결)
+        # - stk_cd: 종목코드. 전문조회할 때는 6자리 종목코드를 넣지만, 전체 조회할 때는 빈 문자열로 둔다.
+        # - fr_ord_no: 시작주문번호. 시작주문번호의 이전 주문은 조회되지 않으며 약정금액에도 포함되지 않음. 빈 문자열로 둔다.
+        # - dmst_stex_tp: 국내 거래소 필터. "%"는 KRX/NXT/SOR 전체. (%:(전체),KRX:한국거래소,NXT:넥스트트레이드,SOR:최선주문집행)
+        #
+        # Output reference:
+        # - acnt_ord_cntr_prst_array[] 행을 _parse_open_orders에서 읽는다.
+        #   ord_no, stk_cd, trde_tp, ord_qty, cntr_qty, 잔량 후보 필드, ord_uv, dmst_stex_tp를 사용한다.
+        today = self._now_utc().astimezone(self._timezone("Asia/Seoul")).strftime("%Y%m%d")
+        return {
+            "ord_dt": today,
+            "stk_bond_tp": "1",     # 0:전체, 1:주식, 2:채권
+            "mrkt_tp": "0",         # 0:전체, 1:코스피, 2:코스닥, 3:OTCBB, 4:ECN
+            "sell_tp": "0",         # 0:전체, 1:매도, 2:매수
+            "qry_tp": "0",          # 0:전체, 1:체결
+            "stk_cd": "",           # 종목코드. 전체 조회할 때는 빈 문자열.
+            "fr_ord_no": "",        # 시작주문번호. 전체 조회할 때는 빈 문자열.
+            "dmst_stex_tp": "%",    # %:(전체),KRX:한국거래소,NXT:넥스트트레이드,SOR:최선주문집행
+        }
+
+    def _cancel_order_request_body(self, order: OpenOrder) -> dict[str, str]:
+        # kt10003 국내주식 취소주문 Input reference:
+        # - dmst_stex_tp: 미체결 주문 행에서 읽은 거래소 구분. (KRX,NXT,SOR)
+        # - orig_ord_no: 취소할 원주문번호.
+        # - stk_cd: KRX/NXT/SOR 조회 suffix를 제거한 종목코드.
+        # - ord_qty: 취소 수량. OpenOrder에 남아 있는 미체결 수량을 보낸다. (단위: 1주, '0' 입력시 잔량 전부 취소)
+        #
+        # Output reference:
+        # - 키움 응답의 ord_no/return_code/return_msg 등 원문 payload는 OrderCancelResult.message에 보관한다.
+        return {
+            "dmst_stex_tp": self._domestic_exchange(order.exchange),
+            "orig_ord_no": order.order_id,
+            "stk_cd": self._order_symbol(order.symbol),
+            "ord_qty": "0",
+        }
+
     def _order_price(self, order: TargetOrder) -> int:
         price = order.limit_price if order.limit_price is not None else order.estimated_price
         return int(price)
@@ -469,6 +535,48 @@ class KiwoomBrokerClient(BrokerClient):
             bid_price_1=self._parse_number(hoga.get("buy_fpr_bid"), absolute=True),
             currency="KRW",
         )
+
+    def _parse_open_orders(self, payload: dict[str, Any]) -> list[OpenOrder]:
+        # kt00009 Output reference:
+        # - acnt_ord_cntr_prst_array[].ord_no: 취소주문에 사용할 원주문번호.
+        # - acnt_ord_cntr_prst_array[].stk_cd: 종목코드. 접두어 1자리 + 종목코드 6자리, 접두어(A: 주식 / J: ELW / Q: ETN)
+        # - acnt_ord_cntr_prst_array[].ord_qty: 원주문 수량.
+        # - acnt_ord_cntr_prst_array[].cntr_qty: 체결 수량.
+        # - acnt_ord_cntr_prst_array[].ord_uv: 원주문 가격.
+        # - acnt_ord_cntr_prst_array[].dmst_stex_tp: 국내거래소 구분.
+        rows = payload.get("acnt_ord_cntr_prst_array") or []
+        orders: list[OpenOrder] = []
+        for item in rows:
+            order_id = str(item.get("ord_no") or "").strip()
+            symbol = self._normalize_symbol(item.get("stk_cd"))
+            quantity = self._parse_int(item.get("ord_qty"))
+            filled_quantity = self._parse_int(item.get("cntr_qty"))
+            remaining_quantity = quantity - filled_quantity
+            if not order_id or not symbol or remaining_quantity <= 0:
+                continue
+
+            side = OrderSide.BUY # 매도는 시장가, 매수는 지정가
+            orders.append(
+                OpenOrder(
+                    account_id=self.account.account_id,
+                    order_id=order_id,
+                    symbol=symbol,
+                    exchange=self._domestic_exchange(item.get("dmst_stex_tp") or ""),
+                    side=side,
+                    quantity=quantity,
+                    filled_quantity=filled_quantity,
+                    remaining_quantity=remaining_quantity,
+                    price=self._parse_number(item.get("ord_uv") or item.get("price"), absolute=True),
+                    raw=dict(item),
+                )
+            )
+        return orders
+
+    def _parse_order_side(self, value: Any) -> OrderSide:
+        text = str(value or "").strip().lower()
+        if text in {"1", "sell", "매도"} or "매도" in text:
+            return OrderSide.SELL
+        return OrderSide.BUY
 
     def _extract_order_id(self, payload: dict[str, Any]) -> str | None:
         value = payload.get("ord_no") or payload.get("order_id")

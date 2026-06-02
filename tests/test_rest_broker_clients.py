@@ -158,12 +158,22 @@ class DBRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
                             {
                                 "AstkIsuNo": "TSLA.US",
                                 "SymCode": "TSLA",
-                                "AstkMktCode": "US",
                                 "AstkSeNm": "뉴욕",
                                 "CrcyCode": "USD",
                                 "AstkSettBaseQty": "2.000000",
                                 "AstkNowPrc": "200.5000",
                                 "AstkEvalAmt": "401.0000",
+                            }
+                        ],
+                        "rsp_cd": "00000",
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "Out1": [
+                            {
+                                "CrcyCode": "USD",
+                                "AstkOrdAbleAmt": "5000",
                             }
                         ],
                         "rsp_cd": "00000",
@@ -185,11 +195,10 @@ class DBRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.holdings[0].market_value, 401.0)
         self.assertEqual(quote.ask_price_1, 201.0)
         self.assertEqual(result.order_id, "77")
-        self.assertEqual(fake.requests[1]["json"]["In"]["InputCondMrktDivCode"], "FN")
-        self.assertEqual(fake.requests[2]["json"]["In"]["AstkMktCode"], "FN")
-        self.assertEqual(fake.requests[2]["json"]["In"]["AstkOrdprcPtnCode"], "2")
+        self.assertEqual(fake.requests[2]["json"]["In"]["InputCondMrktDivCode"], "FN")
+        self.assertEqual(fake.requests[3]["json"]["In"]["AstkOrdprcPtnCode"], "2")
 
-    async def test_db_global_order_uses_exchange_from_balance(self):
+    async def test_db_global_order_does_not_send_unknown_market_code(self):
         client = DBBrokerClient(
             account("db", BrokerName.DB, MarketScope.GLOBAL),
             BrokerCredentials(ref="DB"),
@@ -203,7 +212,87 @@ class DBRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.order_id, "88")
-        self.assertEqual(fake.requests[0]["json"]["In"]["AstkMktCode"], "FY")
+        self.assertNotIn("AstkMktCode", fake.requests[0]["json"]["In"])
+
+    async def test_db_domestic_cancels_open_orders(self):
+        client = DBBrokerClient(
+            account("db", BrokerName.DB, MarketScope.DOMESTIC),
+            BrokerCredentials(ref="DB"),
+        )
+        ready(client, datetime(2026, 5, 26, 1, 0, tzinfo=timezone.utc))
+        fake = FakeHttpClient(
+            [
+                FakeResponse(
+                    {
+                        "Out1": [
+                            {
+                                "OrdNo": 123,
+                                "IsuNo": "A005930",
+                                "BnsTpCode": "2",
+                                "OrdQty": 10,
+                                "AllExecQty": 3,
+                                "MrcAbleQty": 7,
+                                "OrdPrc": "55000.00",
+                            }
+                        ],
+                        "rsp_cd": "00000",
+                    }
+                ),
+                FakeResponse({"Out": {"OrdNo": 124, "PrntOrdNo": 123}, "rsp_cd": "00000"}),
+            ]
+        )
+        client._http_client = lambda: fake
+
+        results = await client.cancel_open_orders()
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].accepted)
+        self.assertEqual(results[0].order.remaining_quantity, 7)
+        self.assertTrue(fake.requests[0]["url"].endswith("/api/v1/trading/kr-stock/inquiry/transaction-history"))
+        self.assertTrue(fake.requests[1]["url"].endswith("/api/v1/trading/kr-stock/order-cancel"))
+        self.assertEqual(fake.requests[1]["json"]["In"]["OrgOrdNo"], 123)
+        self.assertEqual(fake.requests[1]["json"]["In"]["OrdQty"], 7)
+
+    async def test_db_global_cancels_open_orders(self):
+        client = DBBrokerClient(
+            account("db", BrokerName.DB, MarketScope.GLOBAL),
+            BrokerCredentials(ref="DB"),
+        )
+        ready(client, datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc))
+        fake = FakeHttpClient(
+            [
+                FakeResponse(
+                    {
+                        "Out": [
+                            {
+                                "OrdNo": 77,
+                                "SymCode": "TSLA",
+                                "AstkBnsTpCode": "2",
+                                "AstkOrdQty": "10.000000",
+                                "AstkExecQty": "4.000000",
+                                "AstkOrdRmqty": "6.000000",
+                                "AstkOrdPrc": "200.000000",
+                                "AstkSeNm": "NASDAQ",
+                                "OrdTrdTpCode": "0",
+                            }
+                        ],
+                        "rsp_cd": "00000",
+                    }
+                ),
+                FakeResponse({"Out": {"OrdNo": 78}, "rsp_cd": "00000"}),
+            ]
+        )
+        client._http_client = lambda: fake
+
+        results = await client.cancel_open_orders()
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].accepted)
+        self.assertEqual(results[0].order.remaining_quantity, 6)
+        self.assertTrue(fake.requests[0]["url"].endswith("/api/v1/trading/overseas-stock/inquiry/transaction-history"))
+        self.assertTrue(fake.requests[1]["url"].endswith("/api/v1/trading/overseas-stock/order"))
+        self.assertEqual(fake.requests[1]["json"]["In"]["OrdTrdTpCode"], "2")
+        self.assertEqual(fake.requests[1]["json"]["In"]["OrgOrdNo"], 77)
 
     async def test_db_market_open_refresh_and_error_handling(self):
         client = DBBrokerClient(
@@ -229,6 +318,18 @@ class DBRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.requests[1]["headers"]["authorization"], "Bearer new-token")
         with self.assertRaises(BrokerError):
             await client._request_json("/api/test", {"In": {}}, "PRICE")
+
+    async def test_db_http_error_is_broker_error(self):
+        client = DBBrokerClient(
+            account("db", BrokerName.DB, MarketScope.GLOBAL),
+            BrokerCredentials(ref="DB"),
+        )
+        ready(client, datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc))
+        fake = FakeHttpClient([FakeResponse({"rsp_msg": "모의투자 장종료 입니다."}, status_code=500)])
+        client._http_client = lambda: fake
+
+        with self.assertRaisesRegex(BrokerError, "모의투자 장종료"):
+            await client.get_open_orders()
 
 
 class KiwoomRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
@@ -290,6 +391,45 @@ class KiwoomRestBrokerClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.requests[2]["headers"]["api-id"], "ka10004")
         self.assertEqual(fake.requests[4]["headers"]["api-id"], "kt10001")
         self.assertEqual(fake.requests[4]["json"]["trde_tp"], "3")
+
+    async def test_kiwoom_cancels_open_orders(self):
+        client = KiwoomBrokerClient(
+            account("kiwoom", BrokerName.KIWOOM, MarketScope.DOMESTIC),
+            BrokerCredentials(ref="KIWOOM"),
+        )
+        ready(client, datetime(2026, 5, 26, 1, 0, tzinfo=timezone.utc))
+        fake = FakeHttpClient(
+            [
+                FakeResponse(
+                    {
+                        "return_code": 0,
+                        "acnt_ord_cntr_prst_array": [
+                            {
+                                "ord_no": "123",
+                                "stk_cd": "A005930",
+                                "trde_tp": "2",
+                                "ord_qty": "10",
+                                "cntr_qty": "3",
+                                "ord_uv": "55000",
+                                "dmst_stex_tp": "KRX",
+                            }
+                        ],
+                    }
+                ),
+                FakeResponse({"return_code": 0, "ord_no": "123"}),
+            ]
+        )
+        client._http_client = lambda: fake
+
+        results = await client.cancel_open_orders()
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].accepted)
+        self.assertEqual(results[0].order.remaining_quantity, 7)
+        self.assertEqual(fake.requests[0]["headers"]["api-id"], "kt00009")
+        self.assertEqual(fake.requests[1]["headers"]["api-id"], "kt10003")
+        self.assertEqual(fake.requests[1]["json"]["orig_ord_no"], "123")
+        self.assertEqual(fake.requests[1]["json"]["ord_qty"], "0")
 
     async def test_kiwoom_token_expired_retry_and_error_handling(self):
         client = KiwoomBrokerClient(

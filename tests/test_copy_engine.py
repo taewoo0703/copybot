@@ -1,7 +1,7 @@
 import unittest
 
 from core.CopyEngine import CopyEngine
-from core.schemas import AccountConfig, CopyBotConfig, Holding, PortfolioSnapshot, Quote
+from core.schemas import AccountConfig, CopyBotConfig, Holding, OpenOrder, PortfolioSnapshot, Quote
 from core.types import AccountMode, BrokerName, MarketScope, OrderSide, OrderType
 
 
@@ -149,6 +149,62 @@ class CopyEngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(state["master_changed"])
         self.assertEqual(state["last_message"], "master unchanged")
+
+    async def test_sync_slave_cancels_open_orders_before_snapshot(self):
+        config = CopyBotConfig.from_dict(
+            {
+                "accounts": [
+                    fake_account("master").to_dict(),
+                    fake_account("slave", mode=AccountMode.LIVE).to_dict(),
+                ],
+                "copy_groups": [
+                    {
+                        "group_id": "g1",
+                        "master_account_id": "master",
+                        "slave_account_ids": ["slave"],
+                        "mode": "live",
+                    }
+                ],
+            }
+        )
+        engine = CopyEngine()
+        await engine.apply_config(config, sync_after_load=False)
+        engine.registry.get_client("master").snapshot = fake_snapshot(
+            "master",
+            [{"symbol": "A", "exchange": "KRX", "quantity": 10, "current_price": 100}],
+            total_equity=1000,
+        )
+        slave_client = engine.registry.get_client("slave")
+        slave_client.snapshot = fake_snapshot("slave", [], cash=1000, total_equity=1000)
+        slave_client.open_orders = [
+            OpenOrder(
+                account_id="slave",
+                order_id="open-1",
+                symbol="A",
+                exchange="KRX",
+                side=OrderSide.BUY,
+                quantity=3,
+                remaining_quantity=3,
+                price=100,
+            )
+        ]
+        slave_client.quotes["KRX:A"] = Quote(
+            symbol="A",
+            exchange="KRX",
+            last_price=100,
+            ask_price_1=100,
+            bid_price_1=99,
+        )
+
+        state = await engine.sync_group("g1", force=True)
+
+        self.assertEqual(slave_client.open_orders, [])
+        self.assertEqual(slave_client.cancelled_orders[0].order_id, "open-1")
+        self.assertLess(
+            slave_client.events.index("cancel_order"),
+            slave_client.events.index("get_portfolio_snapshot"),
+        )
+        self.assertEqual(state["slaves"]["slave"]["cancel_results"][0]["order"]["order_id"], "open-1")
 
     async def test_live_mode_places_orders_when_supported(self):
         config = CopyBotConfig.from_dict(

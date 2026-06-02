@@ -126,6 +126,44 @@ class OrderResult:
 
 
 @dataclass
+class OpenOrder:
+    account_id: str
+    order_id: str
+    symbol: str
+    side: OrderSide
+    remaining_quantity: int
+    exchange: str = ""
+    quantity: int = 0
+    filled_quantity: int = 0
+    price: float = 0.0
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def instrument_key(self) -> str:
+        return f"{self.exchange}:{self.symbol}" if self.exchange else self.symbol
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["side"] = self.side.value
+        payload["instrument_key"] = self.instrument_key
+        return payload
+
+
+@dataclass
+class OrderCancelResult:
+    order: OpenOrder
+    accepted: bool
+    message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "order": self.order.to_dict(),
+            "accepted": self.accepted,
+            "message": self.message,
+        }
+
+
+@dataclass
 class AccountConfig:
     account_id: str
     broker: BrokerName

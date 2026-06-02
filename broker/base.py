@@ -6,7 +6,7 @@ import os
 import re
 from typing import Any
 
-from core.schemas import AccountConfig, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from core.schemas import AccountConfig, OpenOrder, OrderCancelResult, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import MarketScope, OrderType
 
 
@@ -100,6 +100,18 @@ class BrokerClient(ABC):
 
     async def place_market_order(self, order: TargetOrder) -> OrderResult:
         return await self.place_order(order)
+
+    async def get_open_orders(self) -> list[OpenOrder]:
+        raise BrokerFeatureUnavailable(f"{self.account.broker.value} open order lookup is not implemented")
+
+    async def cancel_order(self, order: OpenOrder) -> OrderCancelResult:
+        raise BrokerFeatureUnavailable(f"{self.account.broker.value} open order cancellation is not implemented")
+
+    async def cancel_open_orders(self) -> list[OrderCancelResult]:
+        results: list[OrderCancelResult] = []
+        for order in await self.get_open_orders():
+            results.append(await self.cancel_order(order))
+        return results
 
     @abstractmethod
     def get_capabilities(self) -> BrokerCapabilities:

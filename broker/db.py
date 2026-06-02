@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from core.schemas import Holding, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from core.schemas import Holding, OpenOrder, OrderCancelResult, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from core.types import MarketScope, OrderSide, OrderType
 
 from .base import BrokerCapabilities, BrokerClient, BrokerCredentials, BrokerError, BrokerFeatureUnavailable
@@ -33,11 +33,14 @@ class DBBrokerClient(BrokerClient):
     domestic_quote_path = "/api/v1/quote/kr-stock/inquiry/price"
     domestic_hoga_path = "/api/v1/quote/kr-stock/inquiry/orderbook"
     domestic_order_path = "/api/v1/trading/kr-stock/order"
+    domestic_open_orders_path = "/api/v1/trading/kr-stock/inquiry/transaction-history"
+    domestic_order_cancel_path = "/api/v1/trading/kr-stock/order-cancel"
 
     global_balance_path = "/api/v1/trading/overseas-stock/inquiry/balance-margin"
     global_quote_path = "/api/v1/quote/overseas-stock/inquiry/price"
     global_hoga_path = "/api/v1/quote/overseas-stock/inquiry/orderbook"
     global_order_path = "/api/v1/trading/overseas-stock/order"
+    global_open_orders_path = "/api/v1/trading/overseas-stock/inquiry/transaction-history"
 
     # DB OpenAPI의 TR ID 목록이다. HTTP URL만으로 업무가 결정되는 것이 아니라,
     # API 문서/테스트베드에서는 각 업무를 TR ID로도 식별한다.
@@ -57,10 +60,13 @@ class DBBrokerClient(BrokerClient):
         "domestic_quote": "PRICE",
         "domestic_hoga": "HOGA",
         "domestic_order": "CSPAT00600",
+        "domestic_open_orders": "CSPAQ04800",
+        "domestic_order_cancel": "CSPAT00800",
         "global_balance": "CAZCQ00400",
         "global_quote": "FSTKPRICE",
         "global_hoga": "FSTKHOGA",
         "global_order": "CAZCT00100",
+        "global_open_orders": "CAZCQ00100",
     }
 
     # 증권사 API는 초당/분당 호출 제한이 있는 경우가 많다.
@@ -71,10 +77,13 @@ class DBBrokerClient(BrokerClient):
         "PRICE": 0.20,
         "HOGA": 0.34,
         "CSPAT00600": 0.10,
+        "CSPAQ04800": 0.50,
+        "CSPAT00800": 0.34,
         "CAZCQ00400": 0.34,
         "FSTKPRICE": 0.50,
         "FSTKHOGA": 0.50,
         "CAZCT00100": 0.10,
+        "CAZCQ00100": 0.50,
     }
 
     def __init__(self, account, credentials: BrokerCredentials):
@@ -219,6 +228,37 @@ class DBBrokerClient(BrokerClient):
         order_id = self._extract_order_id(payload)
         return OrderResult(order=order, accepted=True, order_id=order_id, message=str(payload))
 
+    async def get_open_orders(self) -> list[OpenOrder]:
+        if self.account.market_scope == MarketScope.DOMESTIC:
+            payload = await self._request_all_pages(
+                self.domestic_open_orders_path,
+                self._domestic_open_orders_body(),
+                self.tr_ids["domestic_open_orders"],
+            )
+            return self._parse_domestic_open_orders(payload)
+
+        payload = await self._request_all_pages(
+            self.global_open_orders_path,
+            self._global_open_orders_body(),
+            self.tr_ids["global_open_orders"],
+        )
+        return self._parse_global_open_orders(payload)
+
+    async def cancel_order(self, order: OpenOrder) -> OrderCancelResult:
+        if self.account.market_scope == MarketScope.DOMESTIC:
+            payload = await self._request_json(
+                self.domestic_order_cancel_path,
+                self._domestic_cancel_order_body(order),
+                self.tr_ids["domestic_order_cancel"],
+            )
+        else:
+            payload = await self._request_json(
+                self.global_order_path,
+                self._global_cancel_order_body(order),
+                self.tr_ids["global_order"],
+            )
+        return OrderCancelResult(order=order, accepted=True, message=str(payload))
+
     def get_capabilities(self) -> BrokerCapabilities:
         return BrokerCapabilities(
             broker="db",
@@ -321,7 +361,7 @@ class DBBrokerClient(BrokerClient):
                 raise BrokerError(self.last_message)
             return await self._request_json_with_headers(path, body, tr_id, cont_yn, cont_key, retry_on_token=False)
 
-        response.raise_for_status()
+        self._raise_for_http_error(response, payload)
         self._raise_for_error(payload)
         return payload, response.headers
 
@@ -353,6 +393,16 @@ class DBBrokerClient(BrokerClient):
         code = payload.get("rsp_cd")
         if code is not None and str(code) != "00000":
             raise BrokerError(str(payload.get("rsp_msg") or payload))
+
+    def _raise_for_http_error(self, response, payload: dict[str, Any]) -> None:
+        status_code = getattr(response, "status_code", 200)
+        if status_code < 400:
+            return
+
+        message = payload.get("rsp_msg") or payload.get("message")
+        if not message:
+            message = f"HTTP {status_code} from DB OpenAPI"
+        raise BrokerError(str(message))
 
     def _is_token_expired_response(self, response, payload: dict[str, Any]) -> bool:
         if getattr(response, "status_code", None) == 401:
@@ -423,6 +473,105 @@ class DBBrokerClient(BrokerClient):
                 "TrxTpCode": "1" if is_cash else "2",
                 "CmsnTpCode": "2",
                 "DpntBalTpCode": "1",
+            }
+        }
+
+    def _domestic_open_orders_body(self) -> dict[str, Any]:
+        # CSPAQ04800 국내주식 체결/미체결 조회 Input reference:
+        # - ExecYn: 체결 여부 필터. 미체결 주문을 찾기 위해 가이드 예제 기본값 "0"을 사용한다. (0:전체, 1:체결, 2:미체결(정정취소가능))
+        # - BnsTpCode: 매매 구분 필터. "0"은 매수/매도 전체. (0:전체, 1:매도, 2:매수)
+        # - IsuTpCode: 종목 유형 필터. "0"은 전체 주식 유형. (0:전체)
+        # - QryTp: 조회 구분. 현재 구현은 DB 가이드 예제 기본값 "0"을 사용한다. (0:전체, 1:ELW, 2:ELW제외)
+        # - TrdMktCode: 거래 시장 필터. "0"은 전체 시장. (0 : 전체, 1 : KRX, 2 : NXT)
+        # - SorTpYn: SOR 구분 필터. DB 가이드 예제의 전체/SOR 포함 조회값 "2"를 사용한다. (0 : N, 1 : Y, 2 : 전체)
+        #
+        # Output reference:
+        # - Out1[]에 주문 행이 담긴다. _parse_domestic_open_orders에서 OrdNo, IsuNo,
+        #   BnsTpCode, OrdQty, AllExecQty, MrcAbleQty/MrcQty, OrdPrc를 읽는다.
+        return {
+            "In": {
+                "ExecYn": "0",      # 0:전체, 1:체결, 2:미체결(정정취소가능)
+                "BnsTpCode": "0",   # 0:전체, 1:매도, 2:매수
+                "IsuTpCode": "0",   # 0:전체
+                "QryTp": "0",       # 0:전체, 1:ELW, 2:ELW제외
+                "TrdMktCode": "0",  # 0:전체, 1:KRX, 2:NXT
+                "SorTpYn": "2",     # 0:N, 1:Y, 2:전체
+            }
+        }
+
+    def _global_open_orders_body(self) -> dict[str, Any]:
+        # CAZCQ00100 해외주식 체결내역 조회 Input reference:
+        # - QrySrtDt/QryEndDt: 현지 시장일 기준 조회 기간. 살아 있는 미체결 주문을 잡기 위해 최근 7일을 조회한다.
+        # - AstkIsuNo: 해외주식 종목 코드. 빈 문자열이면 전체 종목.
+        # - AstkBnsTpCode: 매매 구분 필터. "0"은 매수/매도 전체.    (0.전체, 1.매도, 2.매수)
+        # - OrdxctTpCode: 주문/체결 구분 필터. "0"으로 전체 주문 상태를 조회해 잔량 있는 주문을 찾는다. (0:전체, 1:체결, 2:미체결)
+        # - StnlnTpCode: 결제 라인 구분. DB 가이드 예제의 주식 조회 기본값 "1"을 사용한다.  (0:역순, 1:정순)
+        # - QryTpCode: 조회구분코드. DB 해외 체결내역 조회 가이드 예제 기본 필터값 "0"을 사용한다. (0:합산별, 1:건별)
+        # - OnlineYn:온라인여부. DB 가이드 예제의 전체 조회값 "0"을 사용한다. (0:전체, Y:온라인, N:오프라인)
+        # - WonFcurrTpCode: 원화외화구분코드. (1:원화, 2:외화)
+        # - CvrgOrdYn: 반대매매주문여부. DB 해외 체결내역 조회 가이드 예제 기본 필터값 "0"을 사용한다. (0:전체, Y:반대매매, N:일반주문)
+        #
+        # Output reference:
+        # - Out[]에 주문 행이 담긴다. _parse_global_open_orders에서 OrdNo, SymCode/AstkIsuNo,
+        #   AstkSeNm, AstkBnsTpCode, AstkOrdQty, AstkExecQty, AstkOrdRmqty, AstkOrdPrc,
+        #   OrdTrdTpCode를 읽는다.
+        today = self._market_date("America/New_York")
+        start = (datetime.strptime(today, "%Y%m%d") - timedelta(days=7)).strftime("%Y%m%d")
+        return {
+            "In": {
+                "QrySrtDt": start,      # 7일 전
+                "QryEndDt": today,      # 오늘
+                "AstkIsuNo": "",        # 해외주식 종목 코드. 빈 문자열이면 전체 종목.
+                "AstkBnsTpCode": "0",   # 0:전체, 1:매도, 2:매수
+                "OrdxctTpCode": "0",    # 0:전체, 1:체결, 2:미체결
+                "StnlnTpCode": "1",     # 0:역순, 1:정순
+                "QryTpCode": "0",       # 0:합산별, 1:건별
+                "OnlineYn": "0",        # 0:전체, Y:온라인, N:오프라인
+                "WonFcurrTpCode": "2",  # 1:원화, 2:외화
+                "CvrgOrdYn": "0",       # 0:전체, Y:반대매매, N:일반주문
+            }
+        }
+
+    def _domestic_cancel_order_body(self, order: OpenOrder) -> dict[str, Any]:
+        # CSPAT00800 국내주식 취소주문 Input reference:
+        # - OrgOrdNo: 취소할 원주문번호.
+        # - IsuNo: 종목코드. 원주문시 사용한 종목번호.
+        # - OrdQty: 취소 수량. OpenOrder에 남아 있는 미체결 수량을 보낸다.
+        #
+        # Output reference:
+        # - Out.OrdNo는 새 취소주문번호, Out.PrntOrdNo는 원주문번호다.
+        #   원문 payload는 OrderCancelResult.message에 보관한다.
+        return {
+            "In": {
+                "OrgOrdNo": int(order.order_id),
+                "IsuNo": self._domestic_symbol(order.symbol),
+                "OrdQty": int(order.remaining_quantity),
+            }
+        }
+
+    def _global_cancel_order_body(self, order: OpenOrder) -> dict[str, Any]:
+        # CAZCT00100 해외주식 주문 취소 Input reference:
+        # - AstkIsuNo: 해외주식 종목코드/심볼.
+        # - AstkBnsTpCode: 원주문 매매구분. "2"=매수, "1"=매도.
+        # - AstkOrdprcPtnCode: 원주문 호가유형. "1"=지정가, "2"=시장가 (시장가는 취소불가)
+        # - AstkOrdCndiTpCode: 원주문 주문조건. 현재 구현은 일반 주문값 "1"을 사용한다.
+        # - AstkOrdQty/AstkOrdPrc: 취소 수량과 원주문 가격.
+        # - OrdTrdTpCode: "2"가 취소주문. OrgOrdNo에는 원주문번호를 넣는다.
+        # - OrgOrdNo: 취소할 원주문번호. OpenOrder의 order_id를 넣는다.
+        #
+        # Output reference:
+        # - 일반 주문에서는 Out.OrdNo를 _extract_order_id로 읽고, 취소 호출에서는 원문 payload 전체를
+        #   OrderCancelResult.message에 보관한다.
+        return {
+            "In": {
+                "AstkIsuNo": self._global_symbol(order.symbol),
+                "AstkBnsTpCode": "2" if order.side == OrderSide.BUY else "1",
+                "AstkOrdprcPtnCode": "1",
+                "AstkOrdCndiTpCode": "1",
+                "AstkOrdQty": int(order.remaining_quantity),
+                "AstkOrdPrc": order.price,
+                "OrdTrdTpCode": "2",
+                "OrgOrdNo": int(order.order_id),
             }
         }
 
@@ -548,6 +697,8 @@ class DBBrokerClient(BrokerClient):
         for item in raw_holdings:
             symbol = self._global_symbol(item.get("SymCode") or item.get("AstkIsuNo") or "")
             quantity = self._parse_int(item.get("AstkExecBaseQty"))     # 해외주식체결기준수량
+            if quantity <= 0:
+                quantity = self._parse_int(item.get("AstkSettBaseQty"))
             if not symbol or quantity <= 0:
                 continue
             price = self._parse_number(item.get("AstkNowPrc"), absolute=True)
@@ -555,9 +706,7 @@ class DBBrokerClient(BrokerClient):
             holdings.append(
                 Holding(
                     symbol=symbol,
-                    exchange=self._global_market_div_code(
-                        item.get("AstkSeNm") or item.get("AstkMktCode") or item.get("ShtnCntrySymCode")
-                    ),
+                    exchange=self._global_market_div_code(item.get("AstkSeNm")),
                     quantity=quantity,
                     current_price=price,
                     market_value=market_value,
@@ -613,6 +762,90 @@ class DBBrokerClient(BrokerClient):
             currency="KRW" if self.account.market_scope == MarketScope.DOMESTIC else "USD",
         )
 
+    def _parse_domestic_open_orders(self, payload: dict[str, Any]) -> list[OpenOrder]:
+        # CSPAQ04800 Output reference:
+        # - Out1[].OrdNo: 취소주문에 사용할 원주문번호.
+        # - Out1[].IsuNo/ShtnIsuNo: 종목코드. 보통 "A005930" 형식으로 내려온다.
+        # - Out1[].BnsTpCode: 매매 구분. "2"=매수, "1"=매도.
+        # - Out1[].OrdQty: 원주문 수량.
+        # - Out1[].AllExecQty: 체결 수량.
+        # - Out1[].MrcAbleQt: 취소 가능 수량 또는 미체결 잔량.
+        # - Out1[].MrcQty: 취소 수량. 원주문 수량에서 체결 수량과 취소 가능 수량을 뺀 값이다.
+        # - Out1[].OrdPrc: 원주문 가격.
+        rows = payload.get("Out1") or []
+        orders: list[OpenOrder] = []
+        for item in rows:
+            order_id = str(item.get("OrdNo") or "").strip()
+            symbol = self._normalize_symbol(item.get("IsuNo"))
+            quantity = self._parse_int(item.get("OrdQty"))
+            filled_quantity = self._parse_int(item.get("AllExecQty"))
+            remaining_quantity = self._parse_int(item.get("MrcAbleQty"))
+            if not order_id or not symbol or remaining_quantity <= 0:
+                continue
+
+            orders.append(
+                OpenOrder(
+                    account_id=self.account.account_id,
+                    order_id=order_id,
+                    symbol=symbol,
+                    exchange=self._domestic_exchange(),
+                    side=self._parse_order_side(item.get("BnsTpCode") or item.get("side")),
+                    quantity=quantity,
+                    filled_quantity=filled_quantity,
+                    remaining_quantity=remaining_quantity,
+                    price=self._parse_number(item.get("OrdPrc") or item.get("price"), absolute=True),
+                    raw=dict(item),
+                )
+            )
+        return orders
+
+    def _parse_global_open_orders(self, payload: dict[str, Any]) -> list[OpenOrder]:
+        # CAZCQ00100 Output reference:
+        # - Out[].OrdNo: 취소주문에 사용할 원주문번호.
+        # - Out[].SymCode/AstkIsuNo: 해외주식 종목코드.
+        # - Out[].AstkBnsTpCode: 매매 구분. "2"=매수, "1"=매도.
+        # - Out[].AstkOrdQty: 원주문 수량.
+        # - Out[].AstkExecQty: 체결 수량.
+        # - Out[].AstkOrdRmqty: 미체결 잔량.
+        # - Out[].AstkOrdPrc: 원주문 가격.
+        # - Out[].AstkSeNm: 해외주식증권거래소명.
+        # - Out[].OrdTrdTpCode: 주문거래유형. "2"는 취소주문 행이므로 무시한다.
+        rows = payload.get("Out") or payload.get("Out2") or payload.get("orders") or payload.get("items") or []
+        orders: list[OpenOrder] = []
+        for item in rows:
+            if str(item.get("OrdTrdTpCode") or "0") == "2":
+                continue
+
+            order_id = str(item.get("OrdNo") or item.get("order_id") or "").strip()
+            symbol = self._global_symbol(item.get("SymCode") or item.get("AstkIsuNo"))
+            quantity = self._parse_int(item.get("AstkOrdQty"))
+            filled_quantity = self._parse_int(item.get("AstkExecQty"))
+            remaining_quantity = self._parse_int(item.get("AstkOrdRmqty"))
+            if not order_id or not symbol or remaining_quantity <= 0:
+                continue
+
+            orders.append(
+                OpenOrder(
+                    account_id=self.account.account_id,
+                    order_id=order_id,
+                    symbol=symbol,
+                    exchange=self._global_market_div_code(item.get("AstkSeNm")),
+                    side=self._parse_order_side(item.get("AstkBnsTpCode")),
+                    quantity=quantity,
+                    filled_quantity=filled_quantity,
+                    remaining_quantity=remaining_quantity,
+                    price=self._parse_number(item.get("AstkOrdPrc"), absolute=True),
+                    raw=dict(item),
+                )
+            )
+        return orders
+
+    def _parse_order_side(self, value: Any) -> OrderSide:
+        text = str(value or "").strip().lower()
+        if text in {"1", "sell", "매도"} or "매도" in text:
+            return OrderSide.SELL
+        return OrderSide.BUY
+
     def _extract_order_id(self, payload: dict[str, Any]) -> str | None:
         out = payload.get("Out") if isinstance(payload.get("Out"), dict) else payload
         value = out.get("OrdNo") or out.get("ord_no") or out.get("order_id")
@@ -657,6 +890,9 @@ class DBBrokerClient(BrokerClient):
 
     def _now_utc(self) -> datetime:
         return datetime.now(timezone.utc)
+
+    def _market_date(self, timezone_name: str) -> str:
+        return self._now_utc().astimezone(self._timezone(timezone_name)).strftime("%Y%m%d")
 
     def _market_refresh_key(self) -> str | None:
         # 장 시작 전에는 토큰을 불필요하게 새로 받지 않는다.

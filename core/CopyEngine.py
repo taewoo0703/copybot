@@ -7,17 +7,17 @@ import time
 import traceback
 from typing import Any
 
-from broker import BrokerFeatureUnavailable, BrokerClient
+from broker import BrokerError, BrokerFeatureUnavailable, BrokerClient
 
 from .AccountRegistry import AccountRegistry
 from .LogManager import logManager
 from .PortfolioRebalancer import PortfolioRebalancer
 from .config_loader import load_copybot_config
-from .schemas import CopyBotConfig, CopyGroupConfig, OrderResult, PortfolioSnapshot, Quote, TargetOrder
+from .schemas import CopyBotConfig, CopyGroupConfig, OrderCancelResult, OrderResult, PortfolioSnapshot, Quote, TargetOrder
 from .types import OrderSide, OrderType, SyncRunMode
 
 
-POST_ORDER_SNAPSHOT_DELAY_SECONDS = 10
+POST_ORDER_SNAPSHOT_DELAY_SECONDS = 30
 
 
 class CopyEngine:
@@ -137,6 +137,28 @@ class CopyEngine:
         slave_id: str,
     ) -> dict[str, Any]:
         slave_client: BrokerClient = self.registry.get_client(slave_id)
+        cancel_results: list[OrderCancelResult] = []
+        errors: list[str] = []
+        try:
+            cancel_results = await slave_client.cancel_open_orders()
+        except (BrokerError, BrokerFeatureUnavailable) as error:
+            errors.append(str(error))
+        except Exception as error:
+            errors.append(str(error))
+            await logManager.log_error_message_async(error, "Cancel Open Orders")
+
+        if errors:
+            await logManager.log_slave_sync_errors_async(group, slave_id, errors)
+            return {
+                "snapshot": None,
+                "orders": [],
+                "results": [],
+                "cancel_results": [result.to_dict() for result in cancel_results],
+                "errors": errors,
+                "orders_raw": [],
+                "results_raw": [],
+            }
+
         slave_snapshot: PortfolioSnapshot = await slave_client.get_portfolio_snapshot()
         orders = self.rebalancer.build_orders(
             group=group,
@@ -147,7 +169,6 @@ class CopyEngine:
         if orders:
             await logManager.log_rebalance_orders_async(group, master_snapshot, slave_snapshot, orders)
         results: list[OrderResult] = []
-        errors: list[str] = []
         sell_orders = [order for order in orders if order.side == OrderSide.SELL]
         buy_orders = [order for order in orders if order.side == OrderSide.BUY]
         stop_buy_execution = False
@@ -182,6 +203,7 @@ class CopyEngine:
             "snapshot": slave_snapshot.to_dict(),
             "orders": [order.to_dict() for order in orders],
             "results": [result.to_dict() for result in results],
+            "cancel_results": [result.to_dict() for result in cancel_results],
             "errors": errors,
             "orders_raw": orders,
             "results_raw": results,
